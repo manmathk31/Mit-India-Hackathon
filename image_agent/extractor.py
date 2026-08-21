@@ -334,8 +334,12 @@ async def extract_damage_assessment(
             logger.info(f"Photo #{idx+1} successfully analyzed via Custom Model ({len(custom_dets)} detections)")
             all_detections.extend(custom_dets)
         else:
-            logger.info(f"Photo #{idx+1} analyzed via Custom Model - No damage detected. (Gemini Fallback removed for production)")
-
+            logger.info(f"Photo #{idx+1} analyzed via Custom Model - No damage detected or model unavailable. Falling back to Gemini Vision API.")
+            try:
+                gemini_dets = await _analyze_photo_with_gemini(photo_bytes, idx, w, h)
+                all_detections.extend(gemini_dets)
+            except Exception as e:
+                logger.warning(f"Gemini Fallback failed for photo #{idx+1}: {str(e)}")
     # 4. Compute overall damage status
     severities = [d.severity for d in all_detections]
     overall_status = calculate_overall_status(severities)

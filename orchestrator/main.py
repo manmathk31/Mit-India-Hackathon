@@ -415,18 +415,18 @@ async def list_all_claims(db: AsyncSession = Depends(get_db)):
             "status_label": c.status_label or c.status.replace("_", " ").title(),
             "status_description": c.status_description or "Autonomous claim processing complete.",
             "vehicle": {
-                "make": dmg_data.get("vehicle_tier_label", "Maruti Suzuki Swift").split(" ")[0],
-                "model": " ".join(dmg_data.get("vehicle_tier_label", "Maruti Suzuki Swift").split(" ")[1:]),
-                "year": 2021,
-                "registration": doc_data.get("extracted_plate_number", "MH-12-RN-8842"),
-                "fuel": "Petrol"
+                "make": dmg_data.get("vehicle_tier_label", "Unknown").split(" ")[0] if dmg_data.get("vehicle_tier_label") else "Unknown",
+                "model": " ".join(dmg_data.get("vehicle_tier_label", "").split(" ")[1:]) if dmg_data.get("vehicle_tier_label") else "",
+                "year": doc_data.get("extracted_vehicle_meta", {}).get("registration_year", "Unknown") if isinstance(doc_data, dict) else "Unknown",
+                "registration": doc_data.get("extracted_plate_number") if isinstance(doc_data, dict) and doc_data.get("extracted_plate_number") else "Unreadable",
+                "fuel": "N/A"
             },
             "policy": {
-                "number": "POL-PAC-9920194",
-                "holder": doc_data.get("extracted_name_rc", "Manmath Kumar"),
-                "plan": "Comprehensive Bumper-to-Bumper Zero Dep",
-                "expiry": "18 Nov 2026",
-                "status": "Active"
+                "number": "N/A",
+                "holder": doc_data.get("extracted_name_rc") if isinstance(doc_data, dict) and doc_data.get("extracted_name_rc") else "Unknown",
+                "plan": "N/A",
+                "expiry": "N/A",
+                "status": "Unknown"
             },
             "document_check": doc_data,
             "damage_assessment": dmg_data,

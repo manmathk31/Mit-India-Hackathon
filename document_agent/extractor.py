@@ -535,9 +535,47 @@ async def extract_documents(
         dl_data = extracted_dict.get("dl", {}) or {}
         form_data = extracted_dict.get("claim_form", {}) or {}
 
-    # 3. Selective LLM Disambiguation has been removed for production performance.
-    # The system will strictly rely on Local OCR or Full Vision API without field-level loops.
-    
+    # 3. Selective LLM Disambiguation
+    if settings.PRIMARY_OCR_ENGINE == "local":
+        async def _disambiguate_doc(data_dict: Dict[str, Any], doc_type: str, img_bytes: bytes, hint: str):
+            nonlocal fallback_count
+            tasks = []
+            keys = []
+            for k, v in list(data_dict.items()):
+                if k.endswith("_confidence"):
+                    field_name = k.replace("_confidence", "")
+                    conf = v
+                    val = data_dict.get(field_name, "")
+                    if conf < th and field_name != "confidence":
+                        keys.append((field_name, str(val), float(conf)))
+            
+            # Fail-Fast Heuristic: If more than 3 fields are unreadable, it is likely a fake/unrelated document 
+            # (like a notebook page) or completely illegible. Firing LLMs for all fields will cause a rate-limit timeout.
+            if len(keys) > 3:
+                logger.warning(f"[{doc_type}] {len(keys)} fields are unreadable. Skipping LLM to prevent rate-limit timeout. Failing fast.")
+                return
+
+            for field_name, val, conf in keys:
+                tasks.append(
+                    _run_selective_llm_disambiguation(
+                        img_bytes, doc_type, field_name, val, conf, context_hint=hint
+                    )
+                )
+
+            if tasks:
+                results = await asyncio.gather(*tasks)
+                for res in results:
+                    fname = res["field_name"]
+                    data_dict[fname] = res["repaired_value"]
+                    data_dict[fname + "_confidence"] = res["confidence"]
+                    fallback_count += 1
+
+        if rc_data:
+            await _disambiguate_doc(rc_data, "RC", rc_bytes, policy_hint.vehicle_number if policy_hint else "")
+        if dl_data:
+            await _disambiguate_doc(dl_data, "DL", dl_bytes, "")
+        if form_data:
+            await _disambiguate_doc(form_data, "CLAIM_FORM", claim_form_bytes, "")
     # Ensure required plate_number mapping
     if "plate_number" not in rc_data or not rc_data["plate_number"]:
         rc_data["plate_number"] = rc_data.get("rc_number", "Unreadable / Missing")

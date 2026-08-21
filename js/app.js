@@ -603,17 +603,17 @@ function renderUserDashboardView(container) {
                     <tr class="cursor-pointer transition-colors" onclick="navigateTo('claim-detail', '${c.claim_id}')">
                       <td class="font-mono font-bold text-indigo-900">${c.claim_id}</td>
                       <td>
-                        <div class="font-bold text-slate-800">${c.vehicle.make} ${c.vehicle.model}</div>
-                        <div class="text-[11px] font-mono text-slate-500">${c.vehicle.registration}</div>
+                        <div class="font-bold text-slate-800">${c.vehicle?.make || 'Unknown'} ${c.vehicle?.model || ''}</div>
+                        <div class="text-[11px] font-mono text-slate-500">${c.vehicle?.registration || 'Unreadable'}</div>
                       </td>
-                      <td class="text-xs text-slate-600">${c.submission_timestamp.split(',')[0]}</td>
+                      <td class="text-xs text-slate-600">${(c.submission_timestamp || '').split(',')[0]}</td>
                       <td>
-                        <div class="text-xs font-semibold text-slate-700">${c.damage_assessment.location_label}</div>
-                        <div class="text-[11px] text-slate-500">${c.damage_assessment.detected_parts.length} parts identified</div>
+                        <div class="text-xs font-semibold text-slate-700">${c.damage_assessment?.location_label || 'Unidentified'}</div>
+                        <div class="text-[11px] text-slate-500">${c.damage_assessment?.detected_parts?.length || 0} parts identified</div>
                       </td>
                       <td>
-                        <div class="font-bold text-slate-900">${c.cost_estimate.recommended_payout}</div>
-                        <div class="text-[11px] text-slate-500 font-mono">${c.cost_estimate.formatted_final}</div>
+                        <div class="font-bold text-slate-900">${c.cost_estimate?.recommended_payout || 'N/A'}</div>
+                        <div class="text-[11px] text-slate-500 font-mono">${c.cost_estimate?.formatted_final || '₹0'}</div>
                       </td>
                       <td>
                         <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${isApproved ? 'badge-auto-approved' : (isReview ? 'badge-under-review' : 'badge-flagged')}">
