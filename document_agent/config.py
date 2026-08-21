@@ -25,25 +25,29 @@ class Settings(BaseSettings):
         "image/bmp",
     ]
 
-    # External Vision / LLM API Provider Configuration
-    # Supported: "gemini" (Google Gemini 1.5/2.0 Flash) or "openai" (GPT-4o / GPT-4o-mini)
+    # Primary OCR Engine: "local" (Local Tesseract/Regex extraction first) or "vision_api"
+    PRIMARY_OCR_ENGINE: Literal["local", "vision_api"] = "local"
+    TESSERACT_CMD_PATH: Optional[str] = None  # Optional custom path to tesseract binary if on Windows
+
+    # External Vision / LLM API Provider Configuration (Invoked ONLY as fallback for low-confidence fields)
     VISION_PROVIDER: Literal["gemini", "openai", "custom"] = "gemini"
     
-    # API Keys & URLs
+    # Gemini Configuration (Optimized for Flash-Lite with 15 RPM rate limits)
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-1.5-flash"  # Fast, cheap, high-accuracy multimodal
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"  # Target provider model name
     
     OPENAI_API_KEY: str = ""
     OPENAI_API_URL: str = "https://api.openai.com/v1/chat/completions"
     OPENAI_MODEL: str = "gpt-4o-mini"
     
-    # Timeouts & Retries
-    REQUEST_TIMEOUT_SECONDS: float = 25.0
-    MAX_RETRIES: int = 2
+    # Timeouts & Rate-Limit Resilience
+    REQUEST_TIMEOUT_SECONDS: float = 20.0
+    MAX_RETRIES: int = 3
+    RATE_LIMIT_BACKOFF_FACTOR: float = 2.0  # Exponential backoff base (seconds)
+    MAX_CONCURRENT_LLM_CALLS: int = 5       # Concurrency limiter to protect 15 RPM ceiling
 
-    # Tiered Selective LLM Fallback Thresholds
-    # If initial OCR/vision field confidence is below this, selective LLM disambiguation is triggered
-    OCR_CONFIDENCE_FALLBACK_THRESHOLD: float = 0.85
+    # Tiered Selective LLM Fallback Threshold: ONLY fields with confidence < 70% trigger LLM
+    OCR_CONFIDENCE_FALLBACK_THRESHOLD: float = 0.70
 
     # Verification & Matching Thresholds (Deterministic rapidfuzz)
     FUZZY_EXACT_THRESHOLD: float = 98.0
