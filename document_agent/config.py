@@ -29,16 +29,12 @@ class Settings(BaseSettings):
     PRIMARY_OCR_ENGINE: Literal["local", "vision_api"] = "local"
     TESSERACT_CMD_PATH: Optional[str] = None  # Optional custom path to tesseract binary if on Windows
 
-    # External Vision / LLM API Provider Configuration (Invoked ONLY as fallback for low-confidence fields)
-    VISION_PROVIDER: Literal["gemini", "openai", "custom"] = "gemini"
+    # External LLM Provider: Pure Google Gemini
+    VISION_PROVIDER: Literal["gemini", "custom"] = "gemini"
     
     # Gemini Configuration (Optimized for Flash-Lite with 15 RPM rate limits)
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.5-flash-lite"  # Target provider model name
-    
-    OPENAI_API_KEY: str = ""
-    OPENAI_API_URL: str = "https://api.openai.com/v1/chat/completions"
-    OPENAI_MODEL: str = "gpt-4o-mini"
     
     # Timeouts & Rate-Limit Resilience
     REQUEST_TIMEOUT_SECONDS: float = 20.0
