@@ -7,8 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Production Configuration settings for ClaimPilot Document Verification Agent."""
 
-    # Mode & Environment
-    MOCK_MODE: bool = False  # Production-first: live vision engine is default
+    # Environment
     SERVICE_NAME: str = "ClaimPilot Document Verification Agent"
     SERVICE_VERSION: str = "2.0.0"
     LOG_LEVEL: str = "INFO"
@@ -62,11 +61,10 @@ class Settings(BaseSettings):
         return self.OPENAI_API_KEY or os.getenv("OPENAI_API_KEY", "")
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=[".env", "document_agent/.env"],
         env_file_encoding="utf-8",
-        extra="ignore"
+        extra="ignore",
     )
 
 
 settings = Settings()
-

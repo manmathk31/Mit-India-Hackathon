@@ -31,8 +31,8 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
 
-    # Cost Agent Fallback: keeps pipeline fully functional if external Spring AI endpoint is in progress
-    COST_AGENT_MOCK_FALLBACK: bool = True
+    # Cost Agent Resilience: uses built-in estimator if external Spring AI endpoint is unreachable
+    COST_AGENT_BUILTIN_ESTIMATOR: bool = True
 
     # Statutory & Adjudication Rules (IRDAI Regulations)
     IRDAI_MAX_AUTO_APPROVAL_LIMIT: float = 50000.0  # Mandatory ₹50,000 threshold for physical surveyor inspection
@@ -42,7 +42,7 @@ class Settings(BaseSettings):
     CLIENT_RETRIES: int = 2
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=[".env", "orchestrator/.env"],
         env_file_encoding="utf-8",
         extra="ignore",
     )

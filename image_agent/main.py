@@ -37,8 +37,7 @@ app.add_middleware(
 async def startup_event():
     logger.info(
         f"Starting {settings.SERVICE_NAME} v{settings.SERVICE_VERSION} "
-        f"[Engine={settings.DETECTION_ENGINE}, Model={settings.GEMINI_MODEL if settings.DETECTION_ENGINE == 'gemini' else settings.OPENAI_MODEL}, "
-        f"MOCK_MODE={settings.MOCK_MODE}]"
+        f"[Engine={settings.DETECTION_ENGINE}, Model={settings.GEMINI_MODEL}]"
     )
 
 
@@ -50,7 +49,6 @@ async def health_check():
         "service": settings.SERVICE_NAME,
         "version": settings.SERVICE_VERSION,
         "engine": settings.DETECTION_ENGINE,
-        "mock_mode": settings.MOCK_MODE,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

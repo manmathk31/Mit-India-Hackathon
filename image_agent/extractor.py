@@ -85,74 +85,7 @@ def calculate_overall_status(severities: List[str]) -> OverallDamageStatus:
     return "none"
 
 
-def _get_mock_damage_detections(photo_count: int, dimensions: List[Tuple[int, int]]) -> DamageAssessmentResponse:
-    """Generates realistic synthetic damage assessment response for zero-dependency instant testing."""
-    detections: List[DamageDetection] = []
 
-    # Image 0 detections (Primary front impact zone)
-    w0, h0 = dimensions[0] if dimensions else (1280, 720)
-    detections.append(
-        DamageDetection(
-            part_name="front bumper",
-            material_type="plastic-rubber",
-            severity="moderate",
-            repair_or_replace="replace",
-            confidence=0.96,
-            bounding_box=BoundingBox(
-                x=int(w0 * 0.25),
-                y=int(h0 * 0.45),
-                w=int(w0 * 0.50),
-                h=int(h0 * 0.35),
-            ),
-            source_image_index=0,
-        )
-    )
-    detections.append(
-        DamageDetection(
-            part_name="radiator grille",
-            material_type="plastic-rubber",
-            severity="minor",
-            repair_or_replace="repair",
-            confidence=0.91,
-            bounding_box=BoundingBox(
-                x=int(w0 * 0.35),
-                y=int(h0 * 0.38),
-                w=int(w0 * 0.30),
-                h=int(h0 * 0.18),
-            ),
-            source_image_index=0,
-        )
-    )
-
-    # Image 1 detections (if second photo uploaded)
-    if photo_count > 1:
-        w1, h1 = dimensions[1] if len(dimensions) > 1 else (1280, 720)
-        detections.append(
-            DamageDetection(
-                part_name="front left fender",
-                material_type="metal",
-                severity="moderate",
-                repair_or_replace="repair",
-                confidence=0.89,
-                bounding_box=BoundingBox(
-                    x=int(w1 * 0.10),
-                    y=int(h1 * 0.30),
-                    w=int(w1 * 0.35),
-                    h=int(h1 * 0.40),
-                ),
-                source_image_index=1,
-            )
-        )
-
-    severities = [d.severity for d in detections]
-    overall_status = calculate_overall_status(severities)
-
-    return DamageAssessmentResponse(
-        overall_damage_status=overall_status,
-        detections=detections,
-        photos_analyzed=photo_count,
-        no_damage_detected=len(detections) == 0,
-    )
 
 
 # ------------------------------------------------------------------------------
@@ -167,6 +100,7 @@ def _run_custom_model_on_photo(
 ) -> Optional[List[DamageDetection]]:
     """
     Executes inference using our custom-trained vehicle damage model (ONNX / PyTorch weights).
+    """
     # Resolve model path across possible execution directories
     candidates = [
         settings.CUSTOM_MODEL_PATH,
@@ -256,9 +190,7 @@ async def _analyze_photo_with_gemini(
     """Analyzes a single vehicle damage photo using Google Gemini Multimodal Vision API."""
     api_key = settings.active_api_key
     if not api_key:
-        logger.warning(f"GEMINI_API_KEY not set. Using local mock generator for photo #{image_index+1}.")
-        mock_resp = _get_mock_damage_detections(1, [(image_width, image_height)])
-        return mock_resp.detections
+        raise VisionAPIError(f"GEMINI_API_KEY not configured. Cannot analyze photo #{image_index+1}. Set GEMINI_API_KEY in .env.")
 
     model = settings.GEMINI_MODEL
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
@@ -389,14 +321,9 @@ async def extract_damage_assessment(
         img = validate_and_decode_photo(photo_bytes, filename=f"damage_photo_{idx+1}")
         dimensions.append(img.size)
 
-    # 2. Mock mode check
-    if settings.MOCK_MODE:
-        logger.info(f"Analyzing {len(photos)} photos in MOCK_MODE")
-        return _get_mock_damage_detections(len(photos), dimensions)
-
-    # 3. Execution Pipeline (Custom Model Primary -> Gemini Fallback)
+    # 2. Execution Pipeline (Custom Model Primary -> Gemini Vision)
     all_detections: List[DamageDetection] = []
-    logger.info(f"Analyzing {len(photos)} photos (Custom Model + Gemini Fallback)")
+    logger.info(f"Analyzing {len(photos)} photos (Custom Model + Gemini Vision)")
 
     for idx, photo_bytes in photos:
         w, h = dimensions[idx]

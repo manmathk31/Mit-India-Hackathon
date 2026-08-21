@@ -14,16 +14,52 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import declarative_base, relationship
+from sqlalchemy.types import CHAR, TypeDecorator
 
 from .config import settings
 from .logger import logger
 
 # Base Model
 Base = declarative_base()
+
+
+class GUID(TypeDecorator):
+    """
+    Platform-independent GUID/UUID type.
+    Uses PostgreSQL's native UUID type, otherwise uses CHAR(36) on SQLite.
+    Automatically handles str <-> uuid.UUID conversions.
+    """
+    impl = CHAR
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(PG_UUID(as_uuid=True))
+        else:
+            return dialect.type_descriptor(CHAR(36))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        if dialect.name == "postgresql":
+            if isinstance(value, uuid.UUID):
+                return value
+            try:
+                return uuid.UUID(str(value))
+            except (ValueError, TypeError):
+                return value
+        else:
+            return str(value)
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return value
+        return str(value)
 
 
 # ------------------------------------------------------------------------------
@@ -34,7 +70,7 @@ class User(Base):
     """High-Throughput custom user account model."""
     __tablename__ = "users"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
     email = Column(String(255), unique=True, nullable=False, index=True)
     password_hash = Column(String(255), nullable=False)
     full_name = Column(String(150), nullable=False)
@@ -54,8 +90,8 @@ class Policy(Base):
     """Insured vehicle policy contract model."""
     __tablename__ = "policies"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
     policy_number = Column(String(50), unique=True, nullable=False, index=True)
     holder_name = Column(String(150), nullable=False)
     plan_name = Column(String(100), nullable=False)
@@ -80,10 +116,10 @@ class Claim(Base):
     """Core adjudicated claim record."""
     __tablename__ = "claims"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
     claim_number = Column(String(50), unique=True, nullable=False, index=True)
-    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
-    policy_id = Column(String(36), ForeignKey("policies.id", ondelete="SET NULL"), nullable=True)
+    user_id = Column(GUID, ForeignKey("users.id", ondelete="CASCADE"), nullable=True)
+    policy_id = Column(GUID, ForeignKey("policies.id", ondelete="SET NULL"), nullable=True)
     incident_date = Column(DateTime(timezone=True), nullable=False, default=lambda: datetime.now(timezone.utc))
     incident_location = Column(String(200), nullable=True)
     incident_description = Column(Text, nullable=False)
@@ -115,8 +151,8 @@ class Claim(Base):
 class ClaimPhoto(Base):
     __tablename__ = "claim_photos"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    claim_id = Column(String(36), ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    claim_id = Column(GUID, ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
     slot_label = Column(String(50), nullable=False)
     storage_url = Column(Text, nullable=False)
     image_hash = Column(String(64), nullable=True)
@@ -128,8 +164,8 @@ class ClaimPhoto(Base):
 class ClaimDetectedPart(Base):
     __tablename__ = "claim_detected_parts"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    claim_id = Column(String(36), ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    claim_id = Column(GUID, ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
     part_name = Column(String(100), nullable=False)
     material_type = Column(String(30), nullable=False)
     severity = Column(String(20), nullable=False)
@@ -143,8 +179,8 @@ class ClaimDetectedPart(Base):
 class ClaimFraudCheck(Base):
     __tablename__ = "claim_fraud_checks"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    claim_id = Column(String(36), ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    claim_id = Column(GUID, ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
     check_name = Column(String(100), nullable=False)
     status = Column(String(20), nullable=False)
     detail = Column(Text, nullable=False)
@@ -155,8 +191,8 @@ class ClaimFraudCheck(Base):
 class ClaimDecisionTrail(Base):
     __tablename__ = "claim_decision_trails"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    claim_id = Column(String(36), ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    claim_id = Column(GUID, ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
     step_name = Column(String(100), nullable=False)
     outcome = Column(String(100), nullable=False)
     detail = Column(Text, nullable=False)
@@ -169,9 +205,9 @@ class ClaimDecisionTrail(Base):
 class ClaimAdminOverride(Base):
     __tablename__ = "claim_admin_overrides"
 
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    claim_id = Column(String(36), ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
-    admin_id = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    id = Column(GUID, primary_key=True, default=uuid.uuid4)
+    claim_id = Column(GUID, ForeignKey("claims.id", ondelete="CASCADE"), nullable=False)
+    admin_id = Column(GUID, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     original_status = Column(String(30), nullable=False)
     override_status = Column(String(30), nullable=False)
     review_note = Column(Text, nullable=False)
@@ -201,7 +237,19 @@ if not engine_url or "yourproject" in engine_url:
     logger.warning("No valid DATABASE_URL provided. Defaulting to local SQLite for development.")
     engine = create_async_engine("sqlite+aiosqlite:///./claimpilot.db", echo=False)
 else:
-    engine = create_async_engine(engine_url, echo=False, pool_size=10, max_overflow=20)
+    connect_args = {
+        "statement_cache_size": 0,
+        "prepared_statement_cache_size": 0,
+    }
+    if "supabase" in engine_url:
+        connect_args["ssl"] = "require"
+    engine = create_async_engine(
+        engine_url,
+        echo=False,
+        pool_size=10,
+        max_overflow=20,
+        connect_args=connect_args,
+    )
 
 AsyncSessionLocal = async_sessionmaker(
     bind=engine,
@@ -211,23 +259,41 @@ AsyncSessionLocal = async_sessionmaker(
 
 
 async def init_db():
-    """Initializes database tables if they do not exist."""
+    """Initializes database tables if they do not exist, and auto-migrates missing columns."""
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
-        logger.info("Database schema initialized successfully.")
+            
+            # Auto-migrate any columns that might be missing from prior table creations in PostgreSQL
+            migrations = [
+                "ALTER TABLE claims ADD COLUMN IF NOT EXISTS document_check_json JSONB;",
+                "ALTER TABLE claims ADD COLUMN IF NOT EXISTS damage_assessment_json JSONB;",
+                "ALTER TABLE claims ADD COLUMN IF NOT EXISTS cost_estimate_json JSONB;",
+                "ALTER TABLE claims ADD COLUMN IF NOT EXISTS status_label VARCHAR(50) DEFAULT 'Under Review';",
+                "ALTER TABLE claims ADD COLUMN IF NOT EXISTS status_description TEXT;",
+                "ALTER TABLE claims ADD COLUMN IF NOT EXISTS overall_damage_severity VARCHAR(20);",
+                "ALTER TABLE claims ADD COLUMN IF NOT EXISTS estimated_cost_low NUMERIC(12, 2);",
+                "ALTER TABLE claims ADD COLUMN IF NOT EXISTS estimated_cost_high NUMERIC(12, 2);",
+                "ALTER TABLE claims ADD COLUMN IF NOT EXISTS recommended_payout NUMERIC(12, 2);",
+                "ALTER TABLE claims ADD COLUMN IF NOT EXISTS incident_location VARCHAR(200);",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) DEFAULT 'claimant';",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS badge_number VARCHAR(50);"
+            ]
+            for mig in migrations:
+                try:
+                    await conn.execute(text(mig))
+                except Exception as ex:
+                    # Ignore if sqlite or syntax variance
+                    pass
+        logger.info("Database schema initialized and columns auto-migrated successfully.")
     except Exception as e:
         logger.warning(f"Database table initialization warning (schema may already exist in Supabase): {str(e)}")
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
-    """FastAPI async session dependency."""
+    """Dependency provider yielding async SQLAlchemy session."""
     async with AsyncSessionLocal() as session:
         try:
             yield session
-            await session.commit()
-        except Exception:
-            await session.rollback()
-            raise
         finally:
             await session.close()

@@ -8,16 +8,16 @@
 // ==============================================================================
 
 const AppState = {
-  // Authentication & Persona
-  currentUser: MOCK_USERS.claimant, // MOCK_USERS.claimant | MOCK_USERS.admin | null
+  // Authentication & Persona: null by default (requires login/signup)
+  currentUser: null,
+  token: localStorage.getItem('claimpilot_token') || null,
   
-  // Navigation Router:
-  // 'login' | 'signup' | 'user-dashboard' | 'claim-submission' | 'claim-processing' | 'claim-detail' | 'admin-dashboard' | 'admin-claim-detail'
-  currentView: 'user-dashboard',
-  selectedClaimId: 'CLM-2026-00842',
+  // Navigation Router: starts on 'login'
+  currentView: 'login',
+  selectedClaimId: null,
   
-  // Claims Database in local memory
-  claims: JSON.parse(JSON.stringify(ALL_CLAIMS_DATABASE)),
+  // Live Database Claims (fetched from PostgreSQL via API)
+  claims: [],
   adminOverrides: {}, // { [claimId]: { overrideStatus, reviewerName, reviewNote, timestamp } }
   
   // UI Edge States for Testing: 'normal' | 'loading' | 'error' | 'empty'
@@ -163,29 +163,20 @@ function handleBrandClick() {
   }
 }
 
-function switchPersona(role) {
-  if (role === 'admin') {
-    AppState.currentUser = MOCK_USERS.admin;
-    showToast('Switched to Insurance Surveyor / Admin Persona');
-    navigateTo('admin-dashboard');
-  } else {
-    AppState.currentUser = MOCK_USERS.claimant;
-    showToast('Switched to Claimant Persona');
-    navigateTo('user-dashboard');
-  }
+function handleLogout() {
+  AppState.currentUser = null;
+  AppState.token = null;
+  AppState.claims = [];
+  localStorage.removeItem('claimpilot_token');
+  showToast('Signed out successfully');
+  navigateTo('login');
 }
 
 function setUiState(state) {
   AppState.uiState = state;
   renderApp();
-  showToast(`Simulating ${state.toUpperCase()} UI state`);
 }
 
-function handleLogout() {
-  AppState.currentUser = null;
-  showToast('Logged out successfully');
-  navigateTo('login');
-}
 
 // ------------------------------------------------------------------------------
 // 3. VIEW ROUTER DISPATCHER
@@ -267,22 +258,6 @@ function renderLoginView(container) {
           <p class="text-xs text-slate-500 mt-1">Autonomous Motor OD Adjudication Gateway</p>
         </div>
 
-        <!-- Quick Demo Credentials Auto-Fill Banner -->
-        <div class="p-3 rounded-2xl bg-indigo-50/80 border border-indigo-200/70 mb-5 flex items-center justify-between">
-          <div class="text-[11px] text-indigo-950">
-            <span class="font-bold">Demo Quick Fill:</span>
-            <div class="text-slate-500">Pick a persona to test instantly</div>
-          </div>
-          <div class="flex gap-1.5">
-            <button onclick="fillLoginCredentials('claimant')" class="px-2.5 py-1 text-[10px] font-bold bg-white text-indigo-900 border border-indigo-200 rounded-lg shadow-xs hover:bg-indigo-50">
-              Claimant
-            </button>
-            <button onclick="fillLoginCredentials('admin')" class="px-2.5 py-1 text-[10px] font-bold bg-indigo-900 text-white rounded-lg shadow-xs hover:bg-indigo-950">
-              Surveyor
-            </button>
-          </div>
-        </div>
-
         <!-- Login Form -->
         <form id="login-form" onsubmit="handleLoginSubmit(event)" class="space-y-4">
           <div>
@@ -324,17 +299,18 @@ function renderLoginView(container) {
   `;
 }
 
-function fillLoginCredentials(role) {
-  const emailInput = document.getElementById('login-email');
-  const passInput = document.getElementById('login-password');
-  if (role === 'admin') {
-    if (emailInput) emailInput.value = MOCK_USERS.admin.email;
-    if (passInput) passInput.value = 'Surveyor@Pass2026';
-    showToast('Filled Surveyor / Admin credentials');
-  } else {
-    if (emailInput) emailInput.value = MOCK_USERS.claimant.email;
-    if (passInput) passInput.value = 'Claimant@Pass2026';
-    showToast('Filled Claimant credentials');
+async function fetchLiveClaims() {
+  try {
+    const res = await fetch('http://localhost:8000/claims');
+    if (res.ok) {
+      const liveList = await res.json();
+      if (Array.isArray(liveList)) {
+        AppState.claims = liveList;
+        renderApp();
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to fetch live claims:", err);
   }
 }
 
@@ -357,27 +333,23 @@ async function handleLoginSubmit(event) {
     if (res.ok) {
       const data = await res.json();
       localStorage.setItem('claimpilot_token', data.access_token);
+      AppState.token = data.access_token;
       AppState.currentUser = data.user;
       showToast(`Welcome back, ${data.user.name}!`);
+      await fetchLiveClaims();
       navigateTo(data.user.role === 'admin' ? 'admin-dashboard' : 'user-dashboard');
       return;
+    } else {
+      const errData = await res.json().catch(() => ({ detail: "Invalid email or password" }));
+      alert(`Login Failed: ${errData.detail || 'Invalid email or password'}`);
     }
   } catch (err) {
-    console.warn("Backend auth offline, using local session:", err);
+    alert(`Connection Error: Unable to reach auth service at http://localhost:8000`);
   }
 
-  // Graceful fallback for offline / standalone preview
-  setTimeout(() => {
-    if (email.includes('admin') || email.includes('claimpilot.ai') || email === MOCK_USERS.admin.email) {
-      AppState.currentUser = MOCK_USERS.admin;
-      showToast(`Welcome, Surveyor Vikram Malhotra (Admin Portal)`);
-      navigateTo('admin-dashboard');
-    } else {
-      AppState.currentUser = MOCK_USERS.claimant;
-      showToast(`Welcome back, Rajesh Kumar!`);
-      navigateTo('user-dashboard');
-    }
-  }, 500);
+  btn.innerHTML = `<span>Sign In to ClaimPilot</span> <i data-lucide="arrow-right" class="w-4 h-4"></i>`;
+  btn.disabled = false;
+  lucide.createIcons();
 }
 
 function renderSignupView(container) {
@@ -450,17 +422,8 @@ async function handleSignupSubmit(event) {
       return;
     }
   } catch (err) {
-    console.warn("Backend signup offline, using local session:", err);
+    alert(`Connection Error: Unable to reach auth service at http://localhost:8000`);
   }
-
-  AppState.currentUser = {
-    ...MOCK_USERS.claimant,
-    name: name || "New Claimant",
-    email: email || "user@claimpilot.ai"
-  };
-
-  showToast('Account created successfully!');
-  navigateTo('user-dashboard');
 }
 
 // ------------------------------------------------------------------------------
@@ -468,8 +431,10 @@ async function handleSignupSubmit(event) {
 // ------------------------------------------------------------------------------
 
 function renderUserDashboardView(container) {
-  const user = AppState.currentUser || MOCK_USERS.claimant;
-  const userClaims = AppState.claims.filter(c => !c.user_id || c.user_id === user.id);
+  const user = AppState.currentUser;
+  if (!user) { navigateTo('login'); return; }
+  // Strictly filter by this specific user's ID
+  const userClaims = AppState.claims.filter(c => c.user_id === user.id);
 
   // Compute Metrics
   const totalCount = userClaims.length;
@@ -587,7 +552,19 @@ function renderUserDashboardView(container) {
         </div>
 
         <!-- Claims List Grid/Table -->
-        ${filtered.length > 0 ? `
+        ${totalCount === 0 ? `
+          <div class="py-14 text-center">
+            <div class="w-16 h-16 rounded-3xl bg-indigo-50 text-indigo-900 flex items-center justify-center mx-auto mb-3 shadow-inner">
+              <i data-lucide="shield-plus" class="w-8 h-8 text-indigo-600"></i>
+            </div>
+            <h3 class="text-base font-bold text-slate-800">No Claims Filed Yet</h3>
+            <p class="text-xs text-slate-500 max-w-sm mx-auto mt-1 mb-5">You have no active motor damage claims recorded under this account. Submit your vehicle credentials and damage photos to initiate instant autonomous adjudication.</p>
+            <button onclick="startNewClaimFlow()" class="btn-indigo text-white px-6 py-3 rounded-2xl font-bold text-xs shadow-lg inline-flex items-center gap-2">
+              <i data-lucide="plus-circle" class="w-4 h-4 text-amber-300"></i>
+              <span>File Your First Claim</span>
+            </button>
+          </div>
+        ` : (filtered.length > 0 ? `
           <div class="overflow-x-auto">
             <table class="w-full text-left claim-table">
               <thead>
@@ -652,7 +629,7 @@ function renderUserDashboardView(container) {
               Reset Filters
             </button>
           </div>
-        `}
+        `)}
 
       </div>
 
@@ -836,65 +813,85 @@ function renderAdminDashboardView(container) {
         </div>
 
         <!-- Table -->
-        <div class="overflow-x-auto">
-          <table class="w-full text-left claim-table">
-            <thead>
-              <tr>
-                <th>Claim ID</th>
-                <th>Claimant &amp; Policy</th>
-                <th>Vehicle &amp; Regn</th>
-                <th>AI Recommendation</th>
-                <th>Estimate Amount</th>
-                <th>Status</th>
-                <th class="text-right">Surveyor Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${displayClaims.map(c => {
-                const isApproved = c.status === 'auto_approved';
-                const isReview = c.status === 'under_review';
-                const isFlagged = c.status === 'flagged';
-                const hasOverride = AppState.adminOverrides[c.claim_id];
+        ${displayClaims.length > 0 ? `
+          <div class="overflow-x-auto">
+            <table class="w-full text-left claim-table">
+              <thead>
+                <tr>
+                  <th>Claim ID</th>
+                  <th>Claimant &amp; Policy</th>
+                  <th>Vehicle &amp; Regn</th>
+                  <th>AI Recommendation</th>
+                  <th>Estimate Amount</th>
+                  <th>Status</th>
+                  <th class="text-right">Surveyor Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${displayClaims.map(c => {
+                  const isApproved = c.status === 'auto_approved';
+                  const isReview = c.status === 'under_review';
+                  const isFlagged = c.status === 'flagged';
+                  const hasOverride = AppState.adminOverrides[c.claim_id];
 
-                return `
-                  <tr class="cursor-pointer transition-colors" onclick="navigateTo('admin-claim-detail', '${c.claim_id}')">
-                    <td class="font-mono font-bold text-indigo-900">${c.claim_id}</td>
-                    <td>
-                      <div class="font-bold text-slate-800">${c.policy.holder}</div>
-                      <div class="text-[11px] font-mono text-slate-500">${c.policy.number}</div>
-                    </td>
-                    <td>
-                      <div class="font-semibold text-slate-700">${c.vehicle.make} ${c.vehicle.model}</div>
-                      <div class="text-[11px] font-mono text-slate-500">${c.vehicle.registration}</div>
-                    </td>
-                    <td>
-                      <div class="text-xs text-slate-700 max-w-[220px] truncate" title="${c.status_description}">
-                        ${c.status_description}
-                      </div>
-                      ${hasOverride ? `<span class="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">Human Overridden</span>` : ''}
-                    </td>
-                    <td>
-                      <div class="font-bold text-slate-900">${c.cost_estimate.recommended_payout}</div>
-                      <div class="text-[11px] text-slate-500 font-mono">${c.cost_estimate.formatted_final}</div>
-                    </td>
-                    <td>
-                      <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${isApproved ? 'badge-auto-approved' : (isReview ? 'badge-under-review' : 'badge-flagged')}">
-                        <span class="w-1.5 h-1.5 rounded-full ${isApproved ? 'bg-emerald-600' : (isReview ? 'bg-amber-600' : 'bg-rose-600')}"></span>
-                        ${c.status_label.split(':')[0]}
-                      </span>
-                    </td>
-                    <td class="text-right">
-                      <button class="px-3.5 py-1.5 text-xs font-bold text-white bg-indigo-900 hover:bg-indigo-950 rounded-xl transition-colors inline-flex items-center gap-1.5 shadow-xs">
-                        <i data-lucide="eye" class="w-3.5 h-3.5"></i>
-                        <span>Review &amp; Override</span>
-                      </button>
-                    </td>
-                  </tr>
-                `;
-              }).join('')}
-            </tbody>
-          </table>
-        </div>
+                  return `
+                    <tr class="cursor-pointer transition-colors" onclick="navigateTo('admin-claim-detail', '${c.claim_id}')">
+                      <td class="font-mono font-bold text-indigo-900">${c.claim_id}</td>
+                      <td>
+                        <div class="font-bold text-slate-800">${c.policy?.holder || 'Policyholder'}</div>
+                        <div class="text-[11px] font-mono text-slate-500">${c.policy?.number || 'POL-PAC-9920194'}</div>
+                      </td>
+                      <td>
+                        <div class="font-semibold text-slate-700">${c.vehicle?.make || 'Vehicle'} ${c.vehicle?.model || ''}</div>
+                        <div class="text-[11px] font-mono text-slate-500">${c.vehicle?.registration || 'MH-12-RN-8842'}</div>
+                      </td>
+                      <td>
+                        <div class="text-xs text-slate-700 max-w-[220px] truncate" title="${c.status_description}">
+                          ${c.status_description}
+                        </div>
+                        ${hasOverride ? `<span class="text-[10px] font-bold text-indigo-700 bg-indigo-50 px-1.5 py-0.5 rounded">Human Overridden</span>` : ''}
+                      </td>
+                      <td>
+                        <div class="font-bold text-slate-900">${c.cost_estimate?.recommended_payout || '₹0'}</div>
+                        <div class="text-[11px] text-slate-500 font-mono">${c.cost_estimate?.formatted_final || '₹0'}</div>
+                      </td>
+                      <td>
+                        <span class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold ${isApproved ? 'badge-auto-approved' : (isReview ? 'badge-under-review' : 'badge-flagged')}">
+                          <span class="w-1.5 h-1.5 rounded-full ${isApproved ? 'bg-emerald-600' : (isReview ? 'bg-amber-600' : 'bg-rose-600')}"></span>
+                          ${(c.status_label || c.status).split(':')[0]}
+                        </span>
+                      </td>
+                      <td class="text-right">
+                        <button class="px-3.5 py-1.5 text-xs font-bold text-white bg-indigo-900 hover:bg-indigo-950 rounded-xl transition-colors inline-flex items-center gap-1.5 shadow-xs">
+                          <i data-lucide="eye" class="w-3.5 h-3.5"></i>
+                          <span>Review &amp; Override</span>
+                        </button>
+                      </td>
+                    </tr>
+                  `;
+                }).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : (allClaims.length === 0 ? `
+          <div class="py-14 text-center">
+            <div class="w-16 h-16 rounded-3xl bg-indigo-50 text-indigo-900 flex items-center justify-center mx-auto mb-3 shadow-inner">
+              <i data-lucide="inbox" class="w-8 h-8 text-indigo-600"></i>
+            </div>
+            <h3 class="text-base font-bold text-slate-800">No Claims in Triage Queue</h3>
+            <p class="text-xs text-slate-500 max-w-sm mx-auto mt-1">There are no claims filed in the database yet. When a claimant submits a claim, it will appear in real-time in this ledger.</p>
+          </div>
+        ` : `
+          <div class="p-12 text-center">
+            <div class="w-12 h-12 rounded-2xl bg-slate-100 text-slate-400 mx-auto flex items-center justify-center mb-3">
+              <i data-lucide="search-x" class="w-6 h-6"></i>
+            </div>
+            <h3 class="text-sm font-bold text-slate-800">No claims match this filter</h3>
+            <button onclick="setAdminFilter('all')" class="mt-4 px-4 py-2 text-xs font-bold text-indigo-900 bg-indigo-50 hover:bg-indigo-100 rounded-xl">
+              Reset Filters
+            </button>
+          </div>
+        `)}
 
       </div>
 
@@ -912,7 +909,12 @@ function setAdminFilter(status) {
 // ------------------------------------------------------------------------------
 
 function renderClaimDetailView(container, claimId, isAdminView = false) {
-  const claim = AppState.claims.find(c => c.claim_id === claimId) || SCENARIOS.clean_approval;
+  const claim = AppState.claims.find(c => c.claim_id === claimId);
+  if (!claim) {
+    showToast('Claim not found. It may have been removed.');
+    navigateTo(isAdminView ? 'admin-dashboard' : 'user-dashboard');
+    return;
+  }
   const isApproved = claim.status === 'auto_approved';
   const isReview = claim.status === 'under_review';
   const isFlagged = claim.status === 'flagged';
@@ -1117,9 +1119,10 @@ function renderClaimDetailView(container, claimId, isAdminView = false) {
             <div class="grid grid-cols-4 gap-2 mb-4">
               ${(claim.damage_assessment.photos || []).map((ph, idx) => {
                 const keys = ['front', 'rear', 'leftSide', 'rightSide'];
+                const imgSrc = (ph.url && ph.url.startsWith('data:image/svg+xml;utf8,<svg')) ? `data:image/svg+xml;utf8,${encodeURIComponent(ph.url.replace('data:image/svg+xml;utf8,', ''))}` : (ph.url || '');
                 return `
                   <div onclick="openPhotoPreviewModal('${keys[idx] || 'front'}')" class="group/p relative rounded-xl overflow-hidden aspect-square border border-slate-200/80 bg-slate-950 cursor-pointer shadow-sm hover:ring-2 hover:ring-indigo-600 transition-all">
-                    <img src="${ph.url}" class="w-full h-full object-cover group-hover/p:scale-105 transition-transform" alt="${ph.slot}" />
+                    <img src="${imgSrc}" class="w-full h-full object-cover group-hover/p:scale-105 transition-transform" alt="${ph.slot}" />
                     <div class="absolute inset-0 bg-black/40 opacity-0 group-hover/p:opacity-100 transition-opacity flex items-center justify-center text-white">
                       <i data-lucide="zoom-in" class="w-4 h-4"></i>
                     </div>
@@ -1336,11 +1339,6 @@ function renderSubmissionScreen(container) {
             Upload vehicle registration credentials and live damage photos for autonomous AI adjudication.
           </p>
         </div>
-
-        <button onclick="autoFillDemoData()" class="px-4 py-2 text-xs font-bold text-indigo-950 bg-white hover:bg-indigo-50 border border-indigo-200 rounded-xl shadow-xs flex items-center gap-1.5">
-          <i data-lucide="sparkles" class="w-3.5 h-3.5 text-indigo-600"></i>
-          <span>Auto-Fill Demo Assets</span>
-        </button>
       </div>
 
       <!-- Stepper Header -->
@@ -1360,31 +1358,39 @@ function renderSubmissionScreen(container) {
       ${AppState.currentStep === 1 ? `
         <div class="glass-card rounded-3xl p-6 sm:p-8 border border-white/90 space-y-6">
           <div class="flex items-center justify-between">
-            <h2 class="text-lg font-bold font-display text-slate-900">Step 1: Upload Identity &amp; Vehicle Credentials</h2>
-            <span class="text-xs font-semibold text-slate-500">${docsCount}/3 Documents Attached</span>
+            <div>
+              <h2 class="text-lg font-bold font-display text-slate-900">Step 1: Upload Identity &amp; Vehicle Credentials</h2>
+              <p class="text-xs text-slate-500">Attach RC, Driving Licence, and Claim Form</p>
+            </div>
+            <span class="text-xs font-semibold px-3 py-1 rounded-full ${docsCount === 3 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}">${docsCount}/3 Attached</span>
           </div>
 
           <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             ${['rc', 'dl', 'claimForm'].map(docKey => {
               const titles = { rc: 'Registration Certificate (RC)', dl: 'Driving Licence (DL)', claimForm: 'Claim Intimation Form' };
-              const isUploaded = Boolean(AppState.uploads.docs[docKey]);
+              const uploadedDoc = AppState.uploads.docs[docKey];
+              const isUploaded = Boolean(uploadedDoc);
               
               return `
-                <div class="p-5 rounded-2xl border-2 ${isUploaded ? 'border-emerald-500 bg-emerald-50/40' : 'border-dashed border-slate-300 bg-white/70'} flex flex-col justify-between min-h-[160px] text-center">
+                <div class="p-5 rounded-2xl border-2 ${isUploaded ? 'border-emerald-500 bg-emerald-50/40' : 'border-dashed border-slate-300 bg-white/70 hover:border-indigo-400'} flex flex-col justify-between min-h-[180px] text-center transition-all">
                   <div>
-                    <div class="w-10 h-10 rounded-xl mx-auto flex items-center justify-center ${isUploaded ? 'bg-emerald-500 text-white' : 'bg-slate-100 text-slate-500'} mb-2">
-                      <i data-lucide="${isUploaded ? 'check' : 'file-up'}" class="w-5 h-5"></i>
+                    <div class="w-11 h-11 rounded-2xl mx-auto flex items-center justify-center ${isUploaded ? 'bg-emerald-500 text-white' : 'bg-indigo-50 text-indigo-700'} mb-2.5 shadow-xs">
+                      <i data-lucide="${isUploaded ? 'check-circle-2' : 'upload-cloud'}" class="w-6 h-6"></i>
                     </div>
                     <div class="text-xs font-bold text-slate-800">${titles[docKey]}</div>
-                    <div class="text-[11px] text-slate-500 mt-1">${isUploaded ? 'Attached &bull; Ready for OCR' : 'JPEG / PNG / PDF'}</div>
+                    <div class="text-[11px] text-slate-500 mt-1 truncate max-w-[200px] mx-auto">
+                      ${isUploaded ? (uploadedDoc.name || 'Attached &bull; Ready') : 'JPG, PNG, or PDF'}
+                    </div>
+                    ${isUploaded && uploadedDoc.size ? `<div class="text-[10px] text-emerald-700 font-mono mt-0.5">${uploadedDoc.size}</div>` : ''}
                   </div>
 
                   <div class="mt-3">
+                    <input type="file" id="input-${docKey}" accept="image/*,.pdf" onchange="handleRealFileUpload(event, '${docKey}')" class="hidden" />
                     ${isUploaded ? `
                       <button onclick="clearDocUpload('${docKey}')" class="text-xs font-bold text-rose-600 hover:underline">Remove</button>
                     ` : `
-                      <button onclick="simulateUploadDoc('${docKey}')" class="px-3 py-1.5 text-xs font-bold text-indigo-900 bg-white border border-indigo-200 rounded-xl shadow-xs hover:bg-indigo-50">
-                        Upload Sample
+                      <button onclick="document.getElementById('input-${docKey}').click()" class="px-3.5 py-1.5 text-xs font-bold text-indigo-900 bg-white border border-indigo-200 rounded-xl shadow-xs hover:bg-indigo-50 cursor-pointer">
+                        Browse File
                       </button>
                     `}
                   </div>
@@ -1394,7 +1400,7 @@ function renderSubmissionScreen(container) {
           </div>
 
           <div class="flex justify-end pt-4 border-t border-slate-100">
-            <button onclick="handleStep1Next()" class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2">
+            <button onclick="handleStep1Next()" class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 cursor-pointer">
               <span>Next: Damage Photos</span>
               <i data-lucide="arrow-right" class="w-4 h-4"></i>
             </button>
@@ -1406,28 +1412,36 @@ function renderSubmissionScreen(container) {
       ${AppState.currentStep === 2 ? `
         <div class="glass-card rounded-3xl p-6 sm:p-8 border border-white/90 space-y-6">
           <div class="flex items-center justify-between">
-            <h2 class="text-lg font-bold font-display text-slate-900">Step 2: Upload Vehicle Damage Photos</h2>
-            <span class="text-xs font-semibold text-slate-500">${photosCount}/4 Views Captured</span>
+            <div>
+              <h2 class="text-lg font-bold font-display text-slate-900">Step 2: Upload Vehicle Damage Photos</h2>
+              <p class="text-xs text-slate-500">Capture or upload photos of damaged areas for YOLO + Gemini inspection</p>
+            </div>
+            <span class="text-xs font-semibold px-3 py-1 rounded-full ${photosCount >= 1 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}">${photosCount}/4 Attached</span>
           </div>
 
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
             ${['front', 'rear', 'leftSide', 'rightSide'].map(slot => {
-              const isCaptured = Boolean(AppState.uploads.photos[slot]);
+              const uploadedPhoto = AppState.uploads.photos[slot];
+              const isCaptured = Boolean(uploadedPhoto);
               const labels = { front: 'Front Damage', rear: 'Rear Profile', leftSide: 'Left Side', rightSide: 'Right Side' };
 
               return `
-                <div class="p-4 rounded-2xl border-2 ${isCaptured ? 'border-emerald-500 bg-emerald-50/40' : 'border-dashed border-slate-300 bg-white/70'} flex flex-col justify-between aspect-square text-center">
-                  <div>
+                <div class="p-4 rounded-2xl border-2 ${isCaptured ? 'border-emerald-500 bg-emerald-50/40' : 'border-dashed border-slate-300 bg-white/70 hover:border-indigo-400'} flex flex-col justify-between aspect-square text-center transition-all overflow-hidden relative">
+                  ${isCaptured && uploadedPhoto.preview ? `
+                    <img src="${uploadedPhoto.preview}" alt="${labels[slot]}" class="absolute inset-0 w-full h-full object-cover opacity-30 pointer-events-none" />
+                  ` : ''}
+                  <div class="relative z-10">
                     <div class="text-xs font-bold text-slate-800">${labels[slot]}</div>
-                    <div class="text-[10px] text-slate-500">${isCaptured ? 'Live Frame Stored' : 'Angle Required'}</div>
+                    <div class="text-[10px] text-slate-500 mt-0.5 truncate">${isCaptured ? (uploadedPhoto.name || 'Photo Attached') : 'Optical View'}</div>
                   </div>
 
-                  <div class="mt-2">
+                  <div class="mt-2 relative z-10">
+                    <input type="file" id="input-photo-${slot}" accept="image/*" onchange="handleRealPhotoUpload(event, '${slot}')" class="hidden" />
                     ${isCaptured ? `
                       <button onclick="clearPhoto('${slot}')" class="text-xs font-bold text-rose-600 hover:underline">Retake</button>
                     ` : `
-                      <button onclick="simulateCapturePhoto('${slot}')" class="px-2.5 py-1 text-xs font-bold text-indigo-900 bg-white border border-indigo-200 rounded-xl shadow-xs">
-                        Capture
+                      <button onclick="document.getElementById('input-photo-${slot}').click()" class="px-2.5 py-1 text-xs font-bold text-indigo-900 bg-white border border-indigo-200 rounded-xl shadow-xs hover:bg-indigo-50 cursor-pointer">
+                        Upload Photo
                       </button>
                     `}
                   </div>
@@ -1437,10 +1451,10 @@ function renderSubmissionScreen(container) {
           </div>
 
           <div class="flex justify-between pt-4 border-t border-slate-100">
-            <button onclick="goToStep(1)" class="px-4 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl">
+            <button onclick="goToStep(1)" class="px-4 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl cursor-pointer">
               Back
             </button>
-            <button onclick="handleStep2Next()" class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2">
+            <button onclick="handleStep2Next()" class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 cursor-pointer">
               <span>Next: Review &amp; Submit</span>
               <i data-lucide="arrow-right" class="w-4 h-4"></i>
             </button>
@@ -1458,18 +1472,18 @@ function renderSubmissionScreen(container) {
           <div>
             <h2 class="text-2xl font-bold font-display text-slate-900">Ready for Multi-Agent AI Adjudication</h2>
             <p class="text-xs sm:text-sm text-slate-500 max-w-md mx-auto mt-1">
-              Our 4 autonomous microservices (Document OCR, Vision Detection, Spring AI Costing, and Fraud Scans) will execute simultaneously.
+              Our autonomous microservices (Document OCR, YOLO/Gemini Vision, Spring AI Costing, and Fraud Scans) will execute simultaneously.
             </p>
           </div>
 
           <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 max-w-md mx-auto text-left text-xs space-y-2">
-            <div class="flex justify-between text-slate-600"><span>Attached Documents:</span> <strong class="text-slate-900">RC, DL, Claim Form (3)</strong></div>
-            <div class="flex justify-between text-slate-600"><span>Vehicle Damage Photos:</span> <strong class="text-slate-900">4 Optical Views</strong></div>
-            <div class="flex justify-between text-slate-600"><span>Insurance Policy:</span> <strong class="text-slate-900">POL-PAC-9920194 (Active)</strong></div>
+            <div class="flex justify-between text-slate-600"><span>Attached Documents:</span> <strong class="text-slate-900">${docsCount} Attached</strong></div>
+            <div class="flex justify-between text-slate-600"><span>Vehicle Damage Photos:</span> <strong class="text-slate-900">${photosCount} Views Captured</strong></div>
+            <div class="flex justify-between text-slate-600"><span>Claimant Policy:</span> <strong class="text-slate-900">${AppState.currentUser?.email || 'Active Policyholder'}</strong></div>
           </div>
 
           <div class="flex justify-center gap-3 pt-2">
-            <button onclick="goToStep(2)" class="px-5 py-3 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl">
+            <button onclick="goToStep(2)" class="px-5 py-3 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl cursor-pointer">
               Back
             </button>
             <button onclick="startAiProcessing()" class="btn-indigo text-white px-8 py-3.5 rounded-2xl font-bold text-sm shadow-xl flex items-center gap-2 cursor-pointer">
@@ -1490,79 +1504,138 @@ function goToStep(s) {
 }
 
 function handleStep1Next() {
-  simulateUploadDoc('rc');
-  simulateUploadDoc('dl');
-  simulateUploadDoc('claimForm');
   goToStep(2);
 }
 
 function handleStep2Next() {
-  simulateCapturePhoto('front');
-  simulateCapturePhoto('rear');
-  simulateCapturePhoto('leftSide');
-  simulateCapturePhoto('rightSide');
   goToStep(3);
 }
 
-function simulateUploadDoc(k) {
-  AppState.uploads.docs[k] = MOCK_ASSETS.docs[k];
+function handleRealFileUpload(event, docKey) {
+  const file = event.target.files[0];
+  if (!file) return;
+  AppState.uploads.docs[docKey] = {
+    name: file.name,
+    size: (file.size / 1024).toFixed(1) + " KB",
+    file: file
+  };
+  renderApp();
+  showToast(`Attached ${file.name}`);
+}
+
+function clearDocUpload(docKey) {
+  AppState.uploads.docs[docKey] = null;
   renderApp();
 }
 
-function clearDocUpload(k) {
-  AppState.uploads.docs[k] = null;
+function handleRealPhotoUpload(event, slot) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    AppState.uploads.photos[slot] = {
+      name: file.name,
+      preview: e.target.result,
+      file: file
+    };
+    renderApp();
+    showToast(`Captured ${file.name}`);
+  };
+  reader.readAsDataURL(file);
+}
+
+function clearPhoto(slot) {
+  AppState.uploads.photos[slot] = null;
   renderApp();
 }
 
-function simulateCapturePhoto(k) {
-  AppState.uploads.photos[k] = MOCK_ASSETS.damagePhotos[k];
-  renderApp();
-}
+// Processing Pipeline with Live API Call
+async function startAiProcessing() {
+  // Validate files
+  const rcFile = AppState.uploads.docs.rc?.file;
+  const dlFile = AppState.uploads.docs.dl?.file;
+  const formFile = AppState.uploads.docs.claimForm?.file;
+  const realPhotos = Object.values(AppState.uploads.photos).map(p => p?.file).filter(Boolean);
 
-function clearPhoto(k) {
-  AppState.uploads.photos[k] = null;
-  renderApp();
-}
+  if (!rcFile || !dlFile || !formFile || realPhotos.length === 0) {
+    alert("Please upload all 3 required documents (RC, Driving Licence, Claim Form) and at least 1 vehicle damage photo before launching autonomous adjudication.");
+    return;
+  }
 
-function autoFillDemoData() {
-  simulateUploadDoc('rc');
-  simulateUploadDoc('dl');
-  simulateUploadDoc('claimForm');
-  simulateCapturePhoto('front');
-  simulateCapturePhoto('rear');
-  simulateCapturePhoto('leftSide');
-  simulateCapturePhoto('rightSide');
-  AppState.currentStep = 3;
-  renderApp();
-  showToast('Auto-filled all credentials and optical frames!');
-}
-
-// Processing Pipeline Simulation
-function startAiProcessing() {
   navigateTo('claim-processing');
   
   const stages = [
     { title: "Document Agent", desc: "Running local OCR & Sarathi validation..." },
-    { title: "Damage Assessment Agent", desc: "Isolating component boundaries & depth..." },
-    { title: "Spring AI Cost Agent", desc: "Reconciling live OEM parts & labour..." },
-    { title: "Fraud & Anomaly Suite", desc: "Validating perceptual image hashes..." },
+    { title: "Damage Assessment Agent", desc: "Isolating component boundaries & depth with YOLO..." },
+    { title: "Cost Engine", desc: "Reconciling live OEM parts & labour..." },
+    { title: "Fraud & Anomaly Suite", desc: "Validating perceptual image hashes & plate parity..." },
     { title: "Deterministic Decision Engine", desc: "Evaluating IRDAI statutory criteria..." }
   ];
 
   let current = 0;
-  const timer = setInterval(() => {
+  const stageTimer = setInterval(() => {
     current++;
     const progressEl = document.getElementById('processing-progress-bar');
     const stageEl = document.getElementById('processing-stage-text');
-    if (progressEl) progressEl.style.width = `${(current / stages.length) * 100}%`;
+    if (progressEl) progressEl.style.width = `${Math.min(95, (current / stages.length) * 100)}%`;
     if (stageEl && stages[current]) stageEl.innerText = stages[current].desc;
+  }, 400);
 
-    if (current >= stages.length) {
-      clearInterval(timer);
-      showToast('Autonomous claim adjudication completed!');
-      navigateTo('claim-detail', 'CLM-2026-00842');
+  try {
+    const formData = new FormData();
+    formData.append('rc_image', rcFile);
+    formData.append('dl_image', dlFile);
+    formData.append('claim_form_image', formFile);
+    realPhotos.forEach(p => formData.append('damage_photos', p));
+
+    const policyPayload = {
+      policy_number: "POL-PAC-9920194",
+      owner_name: AppState.currentUser?.name || "Manmath Kumar",
+      rc_number: "MH12RN8842",
+      dl_number: "DL-0420110023456",
+      chassis_number: "MA3EKB21S00129845",
+      idv: 550000.0,
+      plan: "Comprehensive Bumper-to-Bumper Zero Dep",
+      expiry: "18 Nov 2026",
+      status: "Active",
+      region: "west"
+    };
+    formData.append('policy_record', JSON.stringify(policyPayload));
+
+    const res = await fetch('http://localhost:8000/claims/process', {
+      method: 'POST',
+      body: formData
+    });
+
+    clearInterval(stageTimer);
+
+    if (res.ok) {
+      const liveClaim = await res.json();
+      liveClaim.user_id = AppState.currentUser ? AppState.currentUser.id : null;
+      
+      // Add real uploaded photo previews to claim so thumbnails render in UI
+      if (!liveClaim.damage_assessment.photos || liveClaim.damage_assessment.photos.length === 0) {
+        liveClaim.damage_assessment.photos = Object.entries(AppState.uploads.photos)
+          .filter(([k, v]) => Boolean(v))
+          .map(([k, v]) => ({ slot: k, url: v.preview || '' }));
+      }
+
+      AppState.claims.unshift(liveClaim);
+      showToast(`Claim ${liveClaim.claim_id} adjudicated and stored in database!`);
+      navigateTo('claim-detail', liveClaim.claim_id);
+    } else {
+      const errData = await res.json().catch(() => ({ detail: "Pipeline error" }));
+      alert(`Adjudication Pipeline Failed: ${errData.detail || errData.error || 'Server error'}`);
+      navigateTo('claim-submission');
+      goToStep(3);
     }
-  }, 500);
+  } catch (err) {
+    clearInterval(stageTimer);
+    console.error("Adjudication API error:", err);
+    alert(`Failed to connect to backend orchestrator: ${err.message}. Ensure uvicorn is running on port 8000.`);
+    navigateTo('claim-submission');
+    goToStep(3);
+  }
 }
 
 function renderProcessingScreen(container) {
@@ -1645,17 +1718,21 @@ function openDocPreviewModal(docKey) {
   const modal = document.getElementById('app-modal');
   if (!modal) return;
 
+  // Use real uploaded doc preview if available, otherwise show info text
+  const uploadedDoc = AppState.uploads?.docs?.[docKey];
+  const hasPreview = uploadedDoc && uploadedDoc.file;
+
   modal.className = "fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-sm flex items-center justify-center p-4";
   modal.innerHTML = `
     <div class="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-4 animate-fade-in-up">
       <div class="flex items-center justify-between">
-        <h3 class="text-base font-bold text-slate-900">Extracted Registration Certificate (RC)</h3>
-        <button onclick="closeModal()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center">
+        <h3 class="text-base font-bold text-slate-900">Extracted Document: ${docKey.toUpperCase()}</h3>
+        <button onclick="closeModal()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center cursor-pointer">
           <i data-lucide="x" class="w-4 h-4 text-slate-600"></i>
         </button>
       </div>
-      <div class="rounded-2xl overflow-hidden border border-slate-200 aspect-[400/260] bg-slate-50">
-        <img src="${MOCK_ASSETS.docs[docKey] || MOCK_ASSETS.docs.rc}" class="w-full h-full object-contain" alt="RC Preview" />
+      <div class="rounded-2xl overflow-hidden border border-slate-200 aspect-[400/260] bg-slate-50 flex items-center justify-center">
+        ${hasPreview ? `<p class="text-sm text-slate-600 font-medium">Document: ${uploadedDoc.name} (${uploadedDoc.size})</p>` : `<p class="text-xs text-slate-500">Document processed by OCR engine. Raw preview not stored for privacy.</p>`}
       </div>
     </div>
   `;
@@ -1666,20 +1743,24 @@ function openPhotoPreviewModal(photoKey) {
   const modal = document.getElementById('app-modal');
   if (!modal) return;
 
+  // Use real uploaded photo preview if available
+  const uploadedPhoto = AppState.uploads?.photos?.[photoKey];
+  const previewUrl = uploadedPhoto?.preview || '';
+
   modal.className = "fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4";
   modal.innerHTML = `
     <div class="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-4 animate-fade-in-up">
       <div class="flex items-center justify-between">
         <div>
-          <h3 class="text-base font-bold text-slate-900">Damage Photo Optical Inspection</h3>
-          <p class="text-xs text-slate-500">AI Bounding Box Overlay &bull; Front Bumper Fascia (96% Confidence)</p>
+          <h3 class="text-base font-bold text-slate-900">Damage Photo Inspection</h3>
+          <p class="text-xs text-slate-500">${uploadedPhoto?.name || 'AI-processed vehicle damage photo'}</p>
         </div>
-        <button onclick="closeModal()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center">
+        <button onclick="closeModal()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center cursor-pointer">
           <i data-lucide="x" class="w-4 h-4 text-slate-600"></i>
         </button>
       </div>
-      <div class="rounded-2xl overflow-hidden border border-slate-200 aspect-[400/300] bg-slate-950">
-        <img src="${MOCK_ASSETS.damagePhotos[photoKey] || MOCK_ASSETS.damagePhotos.front}" class="w-full h-full object-contain" alt="Damage View" />
+      <div class="rounded-2xl overflow-hidden border border-slate-200 aspect-[400/300] bg-slate-950 flex items-center justify-center">
+        ${previewUrl ? `<img src="${previewUrl}" class="w-full h-full object-contain" alt="Damage View" />` : `<p class="text-xs text-slate-400">Photo processed by YOLO + Gemini Vision. Image hash stored for fraud detection.</p>`}
       </div>
     </div>
   `;

@@ -10,7 +10,7 @@ class PolicyRecordInput(BaseModel):
     """Authoritative policy record passed into the claim adjudication pipeline."""
     owner_name: str = Field(..., description="Insured policyholder name")
     rc_number: str = Field(..., description="Vehicle registration number")
-    chassis_number: str = Field(..., description="17-character vehicle chassis number")
+    chassis_number: Optional[str] = Field("MA3EKB21S00129845", description="17-character vehicle chassis number")
     claim_id: Optional[str] = Field(None, description="Claim identifier")
     policy_number: Optional[str] = Field("POL-PAC-9920194", description="Policy contract number")
     plan: Optional[str] = Field("Comprehensive Bumper-to-Bumper Zero Dep", description="Policy insurance tier")
@@ -48,7 +48,7 @@ class CostSource(BaseModel):
 
 
 class CostReconciliation(BaseModel):
-    """Normalized cost calculation contract matching frontend mockData.js shape."""
+    """Normalized cost calculation contract for frontend rendering."""
     final_low: float
     final_high: float
     formatted_final: str
@@ -64,7 +64,7 @@ class CostReconciliation(BaseModel):
     labour_cost_total: float = 0.0
 
 
-# Final Required Output Shape (Exact Contract matching js/mockData.js)
+# Final Required Output Shape (Frontend API Contract)
 class ClaimProcessResponse(BaseModel):
     """Unified ClaimPilot AI Adjudication & Decision Response."""
     id: Optional[str] = None

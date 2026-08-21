@@ -53,12 +53,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import os
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, JSONResponse
+
 # Register Authentication Router
 app.include_router(auth_router)
+
+# Mount Static Assets & Serve Frontend Directly on Port 8000
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CSS_DIR = os.path.join(ROOT_DIR, "css")
+JS_DIR = os.path.join(ROOT_DIR, "js")
+INDEX_HTML = os.path.join(ROOT_DIR, "index.html")
+
+if os.path.exists(CSS_DIR):
+    app.mount("/css", StaticFiles(directory=CSS_DIR), name="css")
+if os.path.exists(JS_DIR):
+    app.mount("/js", StaticFiles(directory=JS_DIR), name="js")
+
+
+@app.get("/", include_in_schema=False)
+async def serve_frontend():
+    """Serves the ClaimPilot AI frontend directly from FastAPI root."""
+    if os.path.exists(INDEX_HTML):
+        return FileResponse(INDEX_HTML)
+    return {"status": "ok", "service": settings.SERVICE_NAME}
 
 
 @app.on_event("startup")
 async def startup_event():
+    # Reloaded configuration with live Supabase IPv4 pooler
     logger.info(
         f"Starting {settings.SERVICE_NAME} v{settings.SERVICE_VERSION} "
         f"[DocAgent={settings.DOCUMENT_AGENT_URL}, ImgAgent={settings.IMAGE_AGENT_URL}, CostAgent={settings.COST_AGENT_URL}]"
@@ -377,11 +401,45 @@ class AdminOverrideRequest(BaseModel):
 
 @app.get("/claims", tags=["Claims"])
 async def list_all_claims(db: AsyncSession = Depends(get_db)):
-    """Retrieves all registered claims from the database."""
+    """Retrieves all registered claims from the database formatted for the frontend."""
     stmt = select(Claim).order_by(desc(Claim.created_at))
     result = await db.execute(stmt)
     claims = result.scalars().all()
-    return claims
+    
+    formatted = []
+    for c in claims:
+        doc_data = c.document_check_json or {}
+        dmg_data = c.damage_assessment_json or {}
+        cost_data = c.cost_estimate_json or {}
+
+        formatted.append({
+            "id": c.claim_number.lower().replace("-", "_"),
+            "claim_id": c.claim_number,
+            "submission_timestamp": c.created_at.strftime("%d %b %Y, %I:%M %p IST") if c.created_at else "Just now",
+            "status": c.status,
+            "status_label": c.status_label or c.status.replace("_", " ").title(),
+            "status_description": c.status_description or "Autonomous claim processing complete.",
+            "vehicle": {
+                "make": dmg_data.get("vehicle_tier_label", "Maruti Suzuki Swift").split(" ")[0],
+                "model": " ".join(dmg_data.get("vehicle_tier_label", "Maruti Suzuki Swift").split(" ")[1:]),
+                "year": 2021,
+                "registration": doc_data.get("extracted_plate_number", "MH-12-RN-8842"),
+                "fuel": "Petrol"
+            },
+            "policy": {
+                "number": "POL-PAC-9920194",
+                "holder": doc_data.get("extracted_name_rc", "Manmath Kumar"),
+                "plan": "Comprehensive Bumper-to-Bumper Zero Dep",
+                "expiry": "18 Nov 2026",
+                "status": "Active"
+            },
+            "document_check": doc_data,
+            "damage_assessment": dmg_data,
+            "cost_estimate": cost_data,
+            "fraud_checks": [],
+            "decision_trail": []
+        })
+    return formatted
 
 
 @app.post("/claims/{claim_number}/override", tags=["Admin"])

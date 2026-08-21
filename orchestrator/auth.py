@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from pydantic import BaseModel, EmailStr
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 # ------------------------------------------------------------------------------
 
 class SignupRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
     full_name: str
     phone_number: Optional[str] = None
@@ -34,7 +34,7 @@ class SignupRequest(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    email: EmailStr
+    email: str
     password: str
 
 
@@ -55,16 +55,25 @@ class UserProfileResponse(BaseModel):
     created_at: Optional[datetime] = None
 
 
+import bcrypt
+
 # ------------------------------------------------------------------------------
 # 2. UTILITY FUNCTIONS
 # ------------------------------------------------------------------------------
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        pw_bytes = plain_password.encode('utf-8')[:72]
+        hash_bytes = hashed_password.encode('utf-8')
+        return bcrypt.checkpw(pw_bytes, hash_bytes)
+    except Exception:
+        return False
 
 
 def get_password_hash(password: str) -> str:
-    return pwd_context.hash(password)
+    pw_bytes = password.encode('utf-8')[:72]
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(pw_bytes, salt).decode('utf-8')
 
 
 def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
@@ -130,78 +139,99 @@ async def require_admin_role(current_user: User = Depends(get_current_user)) -> 
 @router.post("/signup", response_model=AuthTokenResponse, status_code=status.HTTP_201_CREATED)
 async def signup(payload: SignupRequest, db: AsyncSession = Depends(get_db)):
     """Registers a new user without external rate limits."""
-    # Check if email exists
-    stmt = select(User).where(User.email == payload.email)
-    existing = (await db.execute(stmt)).scalar_one_or_none()
-    if existing:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="An account with this email already exists.",
+    try:
+        # Check if email exists
+        stmt = select(User).where(User.email == payload.email)
+        res = await db.execute(stmt)
+        existing = res.scalar_one_or_none()
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="An account with this email already exists.",
+            )
+
+        # Hash password and create user
+        hashed = get_password_hash(payload.password)
+        user = User(
+            email=payload.email,
+            password_hash=hashed,
+            full_name=payload.full_name,
+            phone_number=payload.phone_number,
+            role=payload.role or "claimant",
+            badge_number=payload.badge_number,
+            avatar_url="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
+        )
+        db.add(user)
+        await db.commit()
+        await db.refresh(user)
+
+        logger.info(f"New user registered: {user.email} (Role: {user.role})")
+
+        token = create_access_token(
+            data={"sub": str(user.id), "email": user.email, "role": user.role, "name": user.full_name}
         )
 
-    # Hash password and create user
-    hashed = get_password_hash(payload.password)
-    user = User(
-        email=payload.email,
-        password_hash=hashed,
-        full_name=payload.full_name,
-        phone_number=payload.phone_number,
-        role=payload.role or "claimant",
-        badge_number=payload.badge_number,
-        avatar_url="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
-    )
-    db.add(user)
-    await db.commit()
-    await db.refresh(user)
-
-    logger.info(f"New user registered: {user.email} (Role: {user.role})")
-
-    token = create_access_token(
-        data={"sub": user.id, "email": user.email, "role": user.role, "name": user.full_name}
-    )
-
-    return AuthTokenResponse(
-        access_token=token,
-        user={
-            "id": user.id,
-            "email": user.email,
-            "name": user.full_name,
-            "role": user.role,
-            "badge_number": user.badge_number,
-            "avatar": user.avatar_url,
-        },
-    )
+        return AuthTokenResponse(
+            access_token=token,
+            user={
+                "id": str(user.id),
+                "email": user.email,
+                "name": user.full_name,
+                "role": user.role,
+                "badge_number": user.badge_number,
+                "avatar": user.avatar_url,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Signup error: {str(e)}", exc_info=True)
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Registration failed: {str(e)}",
+        )
 
 
 @router.post("/login", response_model=AuthTokenResponse)
 async def login(payload: LoginRequest, db: AsyncSession = Depends(get_db)):
     """Authenticates credentials and returns JWT."""
-    stmt = select(User).where(User.email == payload.email)
-    user = (await db.execute(stmt)).scalar_one_or_none()
+    try:
+        stmt = select(User).where(User.email == payload.email)
+        res = await db.execute(stmt)
+        user = res.scalar_one_or_none()
 
-    if not user or not verify_password(payload.password, user.password_hash):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Incorrect email or password",
+        if not user or not verify_password(payload.password, user.password_hash):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Incorrect email or password",
+            )
+
+        logger.info(f"User logged in: {user.email} (Role: {user.role})")
+
+        token = create_access_token(
+            data={"sub": str(user.id), "email": user.email, "role": user.role, "name": user.full_name}
         )
 
-    logger.info(f"User logged in: {user.email} (Role: {user.role})")
-
-    token = create_access_token(
-        data={"sub": user.id, "email": user.email, "role": user.role, "name": user.full_name}
-    )
-
-    return AuthTokenResponse(
-        access_token=token,
-        user={
-            "id": user.id,
-            "email": user.email,
-            "name": user.full_name,
-            "role": user.role,
-            "badge_number": user.badge_number,
-            "avatar": user.avatar_url,
-        },
-    )
+        return AuthTokenResponse(
+            access_token=token,
+            user={
+                "id": str(user.id),
+                "email": user.email,
+                "name": user.full_name,
+                "role": user.role,
+                "badge_number": user.badge_number,
+                "avatar": user.avatar_url,
+            },
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Login error: {str(e)}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Login failed: {str(e)}",
+        )
 
 
 @router.get("/me", response_model=UserProfileResponse)

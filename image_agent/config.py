@@ -7,8 +7,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Production Configuration settings for ClaimPilot Image/Damage Assessment Agent."""
 
-    # Mode & Environment
-    MOCK_MODE: bool = True  # True by default for zero-dependency instant testing
+    # Environment
     SERVICE_NAME: str = "ClaimPilot Image Damage Assessment Agent"
     SERVICE_VERSION: str = "1.0.0"
     LOG_LEVEL: str = "INFO"
@@ -50,9 +49,9 @@ class Settings(BaseSettings):
         return self.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=[".env", "image_agent/.env"],
         env_file_encoding="utf-8",
-        extra="ignore"
+        extra="ignore",
     )
 
 

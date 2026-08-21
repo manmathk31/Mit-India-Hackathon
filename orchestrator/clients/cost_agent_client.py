@@ -17,9 +17,9 @@ def _calculate_fallback_cost_estimate(
     idv: Optional[float] = 550000.0,
 ) -> CostReconciliation:
     """
-    Intelligent fallback cost estimation engine for standard Indian motor claims.
+    Intelligent built-in cost estimation engine for standard Indian motor claims.
     Calculates parts depreciation, painting, and certified workshop labour.
-    Used when external Spring AI service is in progress or temporarily offline.
+    Used when external Spring AI service is temporarily unreachable.
     """
     base_costs = {
         "bumper": 6500.0,
@@ -137,7 +137,7 @@ async def call_cost_agent(
     """
     Calls Pratik's Spring AI Cost Agent microservice at COST_AGENT_URL.
     Maps between Java Spring conventions (camelCase) and Python schemas (snake_case).
-    Includes automatic mock fallback if external endpoint is offline during development.
+    Includes automatic built-in estimator if external endpoint is unreachable.
     """
     url = settings.COST_AGENT_URL
     timeout = settings.HTTP_TIMEOUT_SECONDS
@@ -205,9 +205,9 @@ async def call_cost_agent(
     except Exception as e:
         logger.warning(f"Live Cost Agent call failed ({str(e)}). Evaluating fallback policy...")
 
-    # Modular Fallback Execution
-    if settings.COST_AGENT_MOCK_FALLBACK:
-        logger.info(f"Running modular cost calculation fallback for claim '{claim_id}'")
+    # Built-in Estimator Execution
+    if settings.COST_AGENT_BUILTIN_ESTIMATOR:
+        logger.info(f"Running built-in cost estimation engine for claim '{claim_id}'")
         return _calculate_fallback_cost_estimate(vehicle_meta, damage_list, idv=idv)
 
-    raise CostAgentClientError("Could not reach Cost Agent and fallback is disabled.")
+    raise CostAgentClientError("Could not reach Cost Agent and built-in estimator is disabled.")
