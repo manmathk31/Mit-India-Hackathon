@@ -40,19 +40,19 @@ wheels/
 .installed.cfg
 *.egg
 
-# Heavy ML / AI Model Weights (Do not push heavy models to git)
-*.onnx
-*.pt
-*.pth
-*.bin
-*.weights
-*.safetensors
-*.h5
-*.tflite
-models/*.onnx
-models/*.pt
-image_agent/models/*.onnx
-image_agent/models/*.pt
+# Heavy ML / AI Model Weights (Do not push heavy models to git unless explicitly required)
+# *.onnx
+# *.pt
+# *.pth
+# *.bin
+# *.weights
+# *.safetensors
+# *.h5
+# *.tflite
+# models/*.onnx
+# models/*.pt
+# image_agent/models/*.onnx
+# image_agent/models/*.pt
 !image_agent/models/.gitkeep
 
 # Testing & Coverage

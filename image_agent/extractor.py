@@ -328,16 +328,13 @@ async def extract_damage_assessment(
     for idx, photo_bytes in photos:
         w, h = dimensions[idx]
         
-        # Step A: Try Custom Model
+        # Step A: Try Custom Model (Primary)
         custom_dets = _run_custom_model_on_photo(photo_bytes, idx, w, h)
         if custom_dets is not None and len(custom_dets) > 0:
             logger.info(f"Photo #{idx+1} successfully analyzed via Custom Model ({len(custom_dets)} detections)")
             all_detections.extend(custom_dets)
         else:
-            # Step B: Pure Gemini Fallback
-            logger.info(f"Photo #{idx+1} analyzing via pure Gemini fallback ({settings.GEMINI_MODEL})")
-            gemini_dets = await _analyze_photo_with_gemini(photo_bytes, idx, w, h)
-            all_detections.extend(gemini_dets)
+            logger.info(f"Photo #{idx+1} analyzed via Custom Model - No damage detected. (Gemini Fallback removed for production)")
 
     # 4. Compute overall damage status
     severities = [d.severity for d in all_detections]

@@ -535,58 +535,9 @@ async def extract_documents(
         dl_data = extracted_dict.get("dl", {}) or {}
         form_data = extracted_dict.get("claim_form", {}) or {}
 
-    # 3. Selective LLM Disambiguation (Only if running on local OCR results with specific gaps)
-    if fallback_count == 0:
-        tasks = []
-        task_keys = []
-
-        if rc_data.get("owner_name_confidence", 0.0) < th or not rc_data.get("owner_name"):
-            tasks.append(_run_selective_llm_disambiguation(
-                rc_bytes, "Registration Certificate (RC)", "owner_name",
-                rc_data.get("owner_name", ""), rc_data.get("owner_name_confidence", 0.0),
-                context_hint=policy_hint.owner_name if policy_hint else "",
-            ))
-            task_keys.append(("rc", "owner_name", "owner_name_confidence"))
-
-        if rc_data.get("rc_number_confidence", 0.0) < th or not rc_data.get("rc_number"):
-            tasks.append(_run_selective_llm_disambiguation(
-                rc_bytes, "Registration Certificate (RC)", "rc_number",
-                rc_data.get("rc_number", ""), rc_data.get("rc_number_confidence", 0.0),
-                context_hint=policy_hint.rc_number if policy_hint else "",
-            ))
-            task_keys.append(("rc", "rc_number", "rc_number_confidence"))
-
-        if rc_data.get("chassis_number_confidence", 0.0) < th or not rc_data.get("chassis_number"):
-            tasks.append(_run_selective_llm_disambiguation(
-                rc_bytes, "Registration Certificate (RC)", "chassis_number",
-                rc_data.get("chassis_number", ""), rc_data.get("chassis_number_confidence", 0.0),
-                context_hint=policy_hint.chassis_number if policy_hint else "",
-            ))
-            task_keys.append(("rc", "chassis_number", "chassis_number_confidence"))
-
-        if dl_data.get("dl_number_confidence", 0.0) < th or not dl_data.get("dl_number"):
-            tasks.append(_run_selective_llm_disambiguation(
-                dl_bytes, "Driving Licence (DL)", "dl_number",
-                dl_data.get("dl_number", ""), dl_data.get("dl_number_confidence", 0.0),
-            ))
-            task_keys.append(("dl", "dl_number", "dl_number_confidence"))
-
-        if dl_data.get("expiry_date_confidence", 0.0) < th or not dl_data.get("expiry_date"):
-            tasks.append(_run_selective_llm_disambiguation(
-                dl_bytes, "Driving Licence (DL)", "expiry_date",
-                dl_data.get("expiry_date", ""), dl_data.get("expiry_date_confidence", 0.0),
-            ))
-            task_keys.append(("dl", "expiry_date", "expiry_date_confidence"))
-
-        if len(tasks) > 0:
-            results = await asyncio.gather(*tasks, return_exceptions=True)
-            for (doc_type, val_key, conf_key), res in zip(task_keys, results):
-                if isinstance(res, dict):
-                    target = rc_data if doc_type == "rc" else dl_data
-                    target[val_key] = res.get("repaired_value", target.get(val_key, "Unreadable / Missing"))
-                    target[conf_key] = res.get("confidence", 0.85)
-                    fallback_count += 1
-
+    # 3. Selective LLM Disambiguation has been removed for production performance.
+    # The system will strictly rely on Local OCR or Full Vision API without field-level loops.
+    
     # Ensure required plate_number mapping
     if "plate_number" not in rc_data or not rc_data["plate_number"]:
         rc_data["plate_number"] = rc_data.get("rc_number", "Unreadable / Missing")

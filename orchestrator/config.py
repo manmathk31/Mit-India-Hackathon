@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     # Microservice Endpoints
     DOCUMENT_AGENT_URL: str = "http://localhost:8001"
     IMAGE_AGENT_URL: str = "http://localhost:8002"
-    COST_AGENT_URL: str = "http://localhost:8080/api/cost/estimate"
+    COST_AGENT_URL: str = "http://localhost:8082/api/cost/estimate"
 
     # Database & Supabase Configuration
     DATABASE_URL: Optional[str] = "postgresql+asyncpg://postgres.yourproject:password@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"
@@ -31,8 +31,7 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 hours
 
-    # Cost Agent Resilience: uses built-in estimator if external Spring AI endpoint is unreachable
-    COST_AGENT_BUILTIN_ESTIMATOR: bool = True
+    # (Fallback estimator has been completely removed in favor of strict service dependency)
 
     # Statutory & Adjudication Rules (IRDAI Regulations)
     IRDAI_MAX_AUTO_APPROVAL_LIMIT: float = 50000.0  # Mandatory ₹50,000 threshold for physical surveyor inspection

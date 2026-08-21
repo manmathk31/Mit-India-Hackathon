@@ -233,19 +233,21 @@ async def process_claim(
         for d in detections
     ]
 
-    # 5. Call Cost Agent (Spring AI / Fallback)
+    # 5. Call Cost Agent (Spring Boot)
     try:
         cost_result = await call_cost_agent(
             vehicle_meta=extracted_vehicle_meta,
             damage_list=damage_list_for_cost,
+            document_confidence=doc_result.get("confidence_score", 0.95),
             region=policy.region,
             idv=policy.idv,
             claim_id=tracking_claim_id,
         )
     except Exception as e:
-        logger.warning(f"Cost agent failure for claim '{tracking_claim_id}': {str(e)}")
-        from .clients.cost_agent_client import _calculate_fallback_cost_estimate
-        cost_result = _calculate_fallback_cost_estimate(extracted_vehicle_meta, damage_list_for_cost, idv=policy.idv)
+        logger.error(f"Cost agent failure for claim '{tracking_claim_id}': {str(e)}")
+        # Honest fallback if even the HTTP call wrapper fails unexpectedly
+        from .schemas import CostReconciliation
+        cost_result = CostReconciliation(status="unavailable")
 
     # 6. Execute Fraud Checks Suite
     extracted_plate = doc_result.get("extracted_plate_number", policy.rc_number)

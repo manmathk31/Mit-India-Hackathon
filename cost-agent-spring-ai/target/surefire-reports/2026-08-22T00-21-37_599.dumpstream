@@ -1,0 +1,5 @@
+# Created at 2026-08-22T00:21:39.693
+Boot Manifest-JAR contains absolute paths in classpath 'D:\Downloads\cost-agent-spring-ai\cost-agent-spring-ai\target\test-classes'
+Hint: <argLine>-Djdk.net.URLClassPath.disableClassPathURLCheck=true</argLine>
+'other' has different root
+

@@ -37,31 +37,66 @@ class DecisionTrailEntry(BaseModel):
 
 
 # Cost Agent Normalized Data Contract (Spring AI Adapter)
-class CostSource(BaseModel):
-    type: str = "vision"
-    icon: str = "camera"
-    label: str
-    low: float
-    high: float
-    formatted: str
-    desc: str
+class VehicleSummary(BaseModel):
+    make: str
+    model: str
+    variant: Optional[str] = None
+    registrationYear: int
+    vehicleAge: int
+
+
+class PartsCost(BaseModel):
+    beforeDepreciation: float
+    depreciationAmount: float
+    afterDepreciation: float
+    repairMaterialCost: float
+    paintingCost: float
+    totalPartsCost: float
+
+
+class LaborCost(BaseModel):
+    min: float
+    max: float
+
+
+class CombinedTotal(BaseModel):
+    min: float
+    max: float
+
+
+class ConfidenceMetadata(BaseModel):
+    overall: float
+    sourceAgreement: str
+    sourcesUsed: List[str]
+
+
+class TotalLossCheck(BaseModel):
+    idv: Optional[float] = None
+    threshold75Percent: Optional[float] = None
+    repairCostForCheck: float
+    exceeds75Percent: bool
+
+
+class PartCostResult(BaseModel):
+    partName: str
+    workType: str
+    materialType: str
+    baseCost: float
+    depreciationRate: float
+    depreciationAmount: float
+    postDepreciationCost: float
 
 
 class CostReconciliation(BaseModel):
-    """Normalized cost calculation contract for frontend rendering."""
-    final_low: float
-    final_high: float
-    formatted_final: str
-    recommended_payout: str
-    currency: str = "INR"
-    confidence: Literal["high", "medium", "low"] = "high"
-    confidence_label: str
-    sources: List[CostSource] = Field(default_factory=list)
-    reasoning: str
-    disclaimer: str
-    total_loss_flag: bool = False
-    parts_cost_total: float = 0.0
-    labour_cost_total: float = 0.0
+    """Normalized cost calculation contract mapped from Spring Boot CostEstimateResponse."""
+    status: Literal["success", "unavailable"] = "success"
+    vehicle: Optional[VehicleSummary] = None
+    partsCost: Optional[PartsCost] = None
+    laborCost: Optional[LaborCost] = None
+    combinedTotal: Optional[CombinedTotal] = None
+    confidence: Optional[ConfidenceMetadata] = None
+    totalLoss: Optional[TotalLossCheck] = None
+    partBreakdown: Optional[List[PartCostResult]] = None
 
 
 # Final Required Output Shape (Frontend API Contract)

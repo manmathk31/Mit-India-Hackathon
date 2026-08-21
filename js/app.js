@@ -1175,61 +1175,119 @@ function renderClaimDetailView(container, claimId, isAdminView = false) {
       </div>
 
       <!-- CARD C: COST RECONCILIATION -->
-      <div class="glass-card rounded-3xl p-6 sm:p-8 border-2 border-indigo-100/90 shadow-xl bg-gradient-to-br from-white/90 via-white/80 to-indigo-50/40">
+      <div class="glass-card rounded-3xl p-6 sm:p-8 border-2 ${claim.cost_estimate?.status === 'unavailable' ? 'border-rose-100/90 from-white/90 to-rose-50/40' : 'border-indigo-100/90 from-white/90 to-indigo-50/40'} shadow-xl bg-gradient-to-br via-white/80">
+        
+        ${claim.cost_estimate?.status === 'unavailable' ? `
+          <div class="flex flex-col items-center justify-center text-center py-6">
+            <div class="w-16 h-16 rounded-full bg-rose-100 flex items-center justify-center mb-4">
+              <i data-lucide="alert-triangle" class="w-8 h-8 text-rose-600"></i>
+            </div>
+            <h2 class="text-xl font-bold text-slate-900 mb-2">Cost Engine Unreachable</h2>
+            <p class="text-sm text-slate-500 max-w-md">The automated Spring Boot pricing agent is currently unavailable. This claim has been flagged for manual estimation by a surveyor.</p>
+          </div>
+        ` : `
+        
         <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-6 pb-6 border-b border-slate-200/70">
           <div>
             <div class="flex items-center gap-2 mb-1.5">
               <span class="px-3 py-1 rounded-full text-xs font-bold bg-indigo-900 text-white flex items-center gap-1.5 shadow-sm">
                 <i data-lucide="calculator" class="w-3.5 h-3.5 text-amber-300"></i>
-                Multi-Agent Cost Engine (Spring AI)
+                Deterministic Cost Engine (Spring Boot)
               </span>
-              <span class="text-xs font-bold px-2.5 py-1 rounded-full ${claim.cost_estimate.confidence === 'high' ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-amber-100 text-amber-800 border border-amber-200'}">
-                ${claim.cost_estimate.confidence_label}
+              <span class="text-xs font-bold px-2.5 py-1 rounded-full ${claim.cost_estimate?.confidence?.overall >= 0.85 ? 'bg-emerald-100 text-emerald-800 border border-emerald-200' : 'bg-amber-100 text-amber-800 border border-amber-200'}">
+                ${claim.cost_estimate?.confidence?.sourceAgreement || 'N/A'}
               </span>
             </div>
             <h2 class="text-xl sm:text-2xl font-bold font-display text-slate-900">
               Autonomous Cost Reconciliation
             </h2>
             <p class="text-xs sm:text-sm text-slate-500 mt-1">
-              Cross-checked against OEM parts catalog, certified repairer labor index, and historical regional claims.
+              Cross-checked against OEM parts catalog, certified repairer labor index, and IRDAI depreciation rules.
             </p>
           </div>
 
           <div class="bg-white/90 border border-indigo-200/80 rounded-2xl p-4 sm:p-5 shadow-md flex items-center gap-6">
             <div>
               <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Recommended Payout</span>
-              <div class="text-2xl sm:text-3xl font-extrabold font-display text-indigo-950">${claim.cost_estimate.recommended_payout}</div>
+              <div class="text-2xl sm:text-3xl font-extrabold font-display text-indigo-950">
+                ${claim.cost_estimate?.combinedTotal ? '₹' + Math.round(claim.cost_estimate.combinedTotal.min + (claim.cost_estimate.combinedTotal.max - claim.cost_estimate.combinedTotal.min) / 2).toLocaleString() : '₹0'}
+              </div>
               <span class="text-[11px] text-emerald-700 font-semibold flex items-center gap-1 mt-0.5">
                 <i data-lucide="check" class="w-3 h-3"></i> Zero Deductibles Applied
               </span>
             </div>
             <div class="border-l border-slate-200 pl-6 text-right">
-              <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Model Variance Range</span>
-              <div class="text-sm font-bold font-mono text-slate-700 mt-1">${claim.cost_estimate.formatted_final}</div>
+              <span class="text-[11px] font-bold text-slate-400 uppercase tracking-wider block">Combined Total Range</span>
+              <div class="text-sm font-bold font-mono text-slate-700 mt-1">
+                ${claim.cost_estimate?.combinedTotal ? '₹' + Math.round(claim.cost_estimate.combinedTotal.min).toLocaleString() + ' — ₹' + Math.round(claim.cost_estimate.combinedTotal.max).toLocaleString() : '₹0 — ₹0'}
+              </div>
               <span class="text-[10px] text-slate-400 font-medium">95% Confidence Band</span>
             </div>
           </div>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-6">
-          ${claim.cost_estimate.sources && claim.cost_estimate.sources.length > 0 ? claim.cost_estimate.sources.map(s => `
-            <div class="p-4 rounded-2xl bg-white/80 border border-slate-200/70 hover:shadow-md transition-all">
-              <div class="flex items-center justify-between mb-2">
-                <span class="text-xs font-bold text-slate-800">${s.label}</span>
-                <i data-lucide="${s.icon || 'activity'}" class="w-4 h-4 text-indigo-700"></i>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pt-6">
+          <div class="p-4 rounded-2xl bg-white/80 border border-slate-200/70 hover:shadow-md transition-all">
+            <div class="flex items-center justify-between mb-4">
+              <span class="text-sm font-bold text-slate-800 flex items-center gap-2"><i data-lucide="tool" class="w-4 h-4 text-indigo-600"></i> Parts & Materials Cost</span>
+            </div>
+            <div class="space-y-2 text-xs">
+              <div class="flex justify-between text-slate-600"><span class="font-medium">Total Before Depreciation</span><span class="font-mono text-slate-800">₹${Math.round(claim.cost_estimate?.partsCost?.beforeDepreciation || 0).toLocaleString()}</span></div>
+              <div class="flex justify-between text-rose-600"><span class="font-medium">Total Depreciation</span><span class="font-mono">-₹${Math.round(claim.cost_estimate?.partsCost?.depreciationAmount || 0).toLocaleString()}</span></div>
+              <div class="flex justify-between text-slate-600 border-t border-slate-100 pt-1"><span class="font-medium">Post Depreciation</span><span class="font-mono font-bold text-slate-800">₹${Math.round(claim.cost_estimate?.partsCost?.afterDepreciation || 0).toLocaleString()}</span></div>
+              <div class="flex justify-between text-slate-600"><span class="font-medium">Repair Materials & Paint</span><span class="font-mono text-slate-800">₹${Math.round((claim.cost_estimate?.partsCost?.repairMaterialCost || 0) + (claim.cost_estimate?.partsCost?.paintingCost || 0)).toLocaleString()}</span></div>
+            </div>
+          </div>
+
+          <div class="p-4 rounded-2xl bg-white/80 border border-slate-200/70 hover:shadow-md transition-all">
+            <div class="flex items-center justify-between mb-4">
+              <span class="text-sm font-bold text-slate-800 flex items-center gap-2"><i data-lucide="wrench" class="w-4 h-4 text-indigo-600"></i> Labor Cost Range</span>
+            </div>
+            <div class="space-y-3">
+              <div class="text-2xl font-bold font-mono text-slate-900 mt-2">
+                ₹${Math.round(claim.cost_estimate?.laborCost?.min || 0).toLocaleString()} — ₹${Math.round(claim.cost_estimate?.laborCost?.max || 0).toLocaleString()}
               </div>
-              <div class="text-lg font-bold font-mono text-slate-900">${s.formatted}</div>
-              <p class="text-[11px] text-slate-500 mt-1">${s.desc}</p>
+              <div class="text-[11px] text-slate-500">
+                Determined by localized certified workshop index and standard repair man-hours for ${claim.cost_estimate?.vehicle?.make || 'Unknown'} vehicles.
+              </div>
             </div>
-          `).join('') : `
-            <div class="col-span-3 p-4 rounded-2xl bg-white/70 border border-slate-200 text-center text-xs text-slate-500">
-              No repair estimation required — visual inspection confirmed zero damaged components on vehicle.
-            </div>
-          `}
+          </div>
         </div>
 
-        <div class="mt-5 pt-4 border-t border-slate-200/60 text-xs text-slate-500">
-          <strong>IRDAI Statutory Notice:</strong> ${claim.cost_estimate.disclaimer}
+        ${claim.cost_estimate?.partBreakdown && claim.cost_estimate.partBreakdown.length > 0 ? `
+          <div class="mt-6 border border-slate-200 rounded-xl overflow-hidden bg-white/60">
+             <table class="w-full text-left text-xs">
+               <thead class="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                 <tr>
+                   <th class="px-4 py-2">Component</th>
+                   <th class="px-4 py-2">Action</th>
+                   <th class="px-4 py-2">Material</th>
+                   <th class="px-4 py-2 text-right">Base Cost</th>
+                   <th class="px-4 py-2 text-right">Depreciation</th>
+                   <th class="px-4 py-2 text-right">Final Cost</th>
+                 </tr>
+               </thead>
+               <tbody class="divide-y divide-slate-100">
+                 ${claim.cost_estimate.partBreakdown.map(p => `
+                   <tr>
+                     <td class="px-4 py-2 font-medium text-slate-800">${p.partName}</td>
+                     <td class="px-4 py-2"><span class="px-2 py-0.5 bg-slate-100 text-slate-600 rounded uppercase font-semibold text-[10px]">${p.workType}</span></td>
+                     <td class="px-4 py-2 text-slate-500">${p.materialType}</td>
+                     <td class="px-4 py-2 text-right font-mono">₹${Math.round(p.baseCost).toLocaleString()}</td>
+                     <td class="px-4 py-2 text-right font-mono text-rose-500">-${(p.depreciationRate * 100).toFixed(0)}%</td>
+                     <td class="px-4 py-2 text-right font-mono font-bold text-slate-800">₹${Math.round(p.postDepreciationCost).toLocaleString()}</td>
+                   </tr>
+                 `).join('')}
+               </tbody>
+             </table>
+          </div>
+        ` : ''}
+
+        `}
+
+        <div class="mt-5 pt-4 border-t border-slate-200/60 text-xs text-slate-500 flex justify-between">
+          <span><strong>IRDAI Statutory Notice:</strong> Pre-inspection estimate. Final settlement subject to IRDAI limits.</span>
+          ${claim.cost_estimate?.totalLoss?.exceeds75Percent ? `<span class="text-rose-600 font-bold"><i data-lucide="alert-circle" class="w-3 h-3 inline"></i> Total Loss Threshold Exceeded</span>` : ''}
         </div>
       </div>
 

@@ -126,25 +126,37 @@ def evaluate_claim_decision(
     # --------------------------------------------------------------------------
     # Step 4: Cost Reconciliation Evaluation
     # --------------------------------------------------------------------------
-    cost_conf = cost_estimate.confidence
-    recommended_str = cost_estimate.recommended_payout
-
-    if cost_estimate.final_high == 0 or recommended_str == "₹0":
-        cost_outcome = "Zero repair payout (₹0)"
-        cost_detail = "No physical vehicle damage identified to estimate repair costs"
-    else:
-        cost_outcome = f"{cost_conf.capitalize()} agreement across sources"
-        cost_detail = f"Multi-agent pricing converged at {recommended_str}"
-
-    decision_trail.append(
-        DecisionTrailEntry(
-            step="Cost Reconciliation",
-            outcome=cost_outcome,
-            detail=cost_detail,
-            status="completed",
-            timestamp=format_ts(18),
+    if cost_estimate.status == "unavailable":
+        decision_trail.append(
+            DecisionTrailEntry(
+                step="Cost Reconciliation",
+                outcome="Cost Engine Unreachable",
+                detail="The cost calculation service is currently unavailable. Manual estimation required.",
+                status="flagged",
+                timestamp=format_ts(18),
+            )
         )
-    )
+    else:
+        cost_conf = f"{cost_estimate.confidence.overall * 100:.0f}%" if cost_estimate.confidence else "N/A"
+        recommended_str = f"₹{int(cost_estimate.combinedTotal.min + (cost_estimate.combinedTotal.max - cost_estimate.combinedTotal.min)/2):,}" if cost_estimate.combinedTotal else "₹0"
+
+        if not cost_estimate.combinedTotal or cost_estimate.combinedTotal.max == 0:
+            cost_outcome = "Zero repair payout (₹0)"
+            cost_detail = "No physical vehicle damage identified to estimate repair costs"
+        else:
+            agreement_label = cost_estimate.confidence.sourceAgreement if cost_estimate.confidence else "Agreement"
+            cost_outcome = f"{agreement_label} across sources ({cost_conf})"
+            cost_detail = f"Multi-agent pricing converged at {recommended_str}"
+
+        decision_trail.append(
+            DecisionTrailEntry(
+                step="Cost Reconciliation",
+                outcome=cost_outcome,
+                detail=cost_detail,
+                status="completed",
+                timestamp=format_ts(18),
+            )
+        )
 
     # --------------------------------------------------------------------------
     # Step 5: Fraud & Anomaly Scan Evaluation
@@ -187,12 +199,15 @@ def evaluate_claim_decision(
     # Step 6: Statutory IRDAI Limit Check (Must Run First Unconditionally)
     # --------------------------------------------------------------------------
     irdai_limit = settings.IRDAI_MAX_AUTO_APPROVAL_LIMIT
-    if cost_estimate.final_high >= irdai_limit or cost_estimate.final_low >= irdai_limit:
+    max_estimate = cost_estimate.combinedTotal.max if cost_estimate.status == "success" and cost_estimate.combinedTotal else 0
+    formatted_max = f"₹{int(max_estimate):,}"
+    
+    if cost_estimate.status == "success" and max_estimate >= irdai_limit:
         decision_trail.append(
             DecisionTrailEntry(
                 step="Final Adjudication",
                 outcome="Flagged (IRDAI Mandatory Inspection)",
-                detail=f"Estimate ({cost_estimate.formatted_final}) exceeds ₹50,000 threshold. Statutory surveyor inspection required.",
+                detail=f"Estimate (up to {formatted_max}) exceeds ₹50,000 threshold. Statutory surveyor inspection required.",
                 status="flagged",
                 timestamp=format_ts(26),
             )
@@ -200,14 +215,14 @@ def evaluate_claim_decision(
         return (
             "flagged",
             "Flagged: Statutory Inspection Required",
-            f"Repair estimate ({cost_estimate.formatted_final}) exceeds the ₹50,000 IRDAI threshold for autonomous settlement.",
+            f"Repair estimate (up to {formatted_max}) exceeds the ₹50,000 IRDAI threshold for autonomous settlement.",
             decision_trail,
         )
 
     # --------------------------------------------------------------------------
     # Step 7: Constructive Total Loss Check
     # --------------------------------------------------------------------------
-    if cost_estimate.total_loss_flag:
+    if cost_estimate.status == "success" and cost_estimate.totalLoss and cost_estimate.totalLoss.exceeds75Percent:
         decision_trail.append(
             DecisionTrailEntry(
                 step="Final Adjudication",
@@ -227,12 +242,16 @@ def evaluate_claim_decision(
     # --------------------------------------------------------------------------
     # Step 8: Fraud & Document Failure Hard Stops
     # --------------------------------------------------------------------------
-    if failed_frauds or doc_status == "warning":
+    if failed_frauds or doc_status == "warning" or cost_estimate.status == "unavailable":
+        reason = "document mismatch or failed fraud check"
+        if cost_estimate.status == "unavailable":
+            reason = "cost engine unreachable"
+        
         decision_trail.append(
             DecisionTrailEntry(
                 step="Final Adjudication",
                 outcome="Flagged for Manual Investigation",
-                detail="Flagged due to document mismatch or failed fraud check.",
+                detail=f"Flagged due to {reason}.",
                 status="flagged",
                 timestamp=format_ts(26),
             )
@@ -240,14 +259,15 @@ def evaluate_claim_decision(
         return (
             "flagged",
             "Flagged: Forensic Discrepancy",
-            "One or more forensic checks failed. Referred to Special Investigation Unit (SIU).",
+            f"One or more forensic checks failed ({reason}). Referred to Special Investigation Unit (SIU).",
             decision_trail,
         )
 
     # --------------------------------------------------------------------------
     # Step 9: Review Stage (Resolved document or Medium cost confidence)
     # --------------------------------------------------------------------------
-    if doc_status == "resolved" or cost_conf == "medium" or warning_frauds:
+    cost_conf_overall = cost_estimate.confidence.overall if cost_estimate.status == "success" and cost_estimate.confidence else 1.0
+    if doc_status == "resolved" or cost_conf_overall < 0.85 or warning_frauds:
         decision_trail.append(
             DecisionTrailEntry(
                 step="Final Adjudication",
