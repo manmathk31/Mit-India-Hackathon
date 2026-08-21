@@ -4,15 +4,31 @@ import time
 from datetime import datetime, timezone
 from typing import List, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
+from .auth import get_current_user, require_admin_role, router as auth_router
 from .clients.cost_agent_client import call_cost_agent
 from .clients.document_agent_client import call_document_agent
 from .clients.image_agent_client import call_image_agent
 from .config import settings
+from .db import (
+    Claim,
+    ClaimAdminOverride,
+    ClaimDecisionTrail,
+    ClaimDetectedPart,
+    ClaimFraudCheck,
+    ClaimPhoto,
+    Policy,
+    User,
+    get_db,
+    init_db,
+)
 from .decision_engine import evaluate_claim_decision
 from .fraud_checks import run_all_fraud_checks
 from .logger import logger
@@ -24,7 +40,7 @@ from .schemas import (
 
 app = FastAPI(
     title="ClaimPilot AI - Orchestrator & Decision Engine",
-    description="Central coordination microservice for multi-agent autonomous motor insurance claim adjudication.",
+    description="Central coordination microservice with Supabase Database and JWT Authentication.",
     version=settings.SERVICE_VERSION,
 )
 
@@ -37,6 +53,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Register Authentication Router
+app.include_router(auth_router)
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -44,11 +63,13 @@ async def startup_event():
         f"Starting {settings.SERVICE_NAME} v{settings.SERVICE_VERSION} "
         f"[DocAgent={settings.DOCUMENT_AGENT_URL}, ImgAgent={settings.IMAGE_AGENT_URL}, CostAgent={settings.COST_AGENT_URL}]"
     )
+    # Initialize DB tables
+    await init_db()
 
 
 @app.get("/health", tags=["System"])
 async def health_check():
-    """Liveness probe reporting connected agent microservices."""
+    """Liveness probe reporting connected microservices and database."""
     return {
         "status": "ok",
         "service": settings.SERVICE_NAME,
@@ -58,6 +79,7 @@ async def health_check():
             "image_agent": settings.IMAGE_AGENT_URL,
             "cost_agent": settings.COST_AGENT_URL,
         },
+        "database": "connected" if settings.DATABASE_URL else "local_sqlite",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -78,31 +100,34 @@ def _parse_policy_record(policy_record_raw: str, claim_id: Optional[str] = None)
         )
 
 
+# ------------------------------------------------------------------------------
+# CLAIMS ADJUDICATION PIPELINE & PERSISTENCE
+# ------------------------------------------------------------------------------
+
 @app.post(
     "/claims/process",
     response_model=ClaimProcessResponse,
     status_code=status.HTTP_200_OK,
     tags=["Claims"],
-    summary="End-to-end multi-agent claim adjudication pipeline",
+    summary="End-to-end multi-agent claim adjudication pipeline with database persistence",
 )
 async def process_claim(
     rc_image: UploadFile = File(..., description="Vehicle Registration Certificate image"),
     dl_image: UploadFile = File(..., description="Driver Driving Licence image"),
     claim_form_image: UploadFile = File(..., description="Claim Intimation Form image"),
     damage_photos: List[UploadFile] = File(..., description="1 to 8 physical vehicle damage photos"),
-    policy_record: str = Form(
-        ...,
-        description="Authoritative policy record JSON string: {owner_name, rc_number, chassis_number, ...}",
-    ),
+    policy_record: str = Form(..., description="Authoritative policy record JSON string"),
     claim_id: Optional[str] = Form(None, description="Optional unique claim identifier"),
+    db: AsyncSession = Depends(get_db),
 ):
     """
-    Core ClaimPilot AI Adjudication Endpoint.
+    Core ClaimPilot AI Adjudication & DB Persistence Endpoint.
     1. Concurrently calls Document Agent & Image Agent.
     2. Calls Spring AI Cost Agent with extracted vehicle specs & damage matrix.
     3. Runs comprehensive Fraud Verification scans.
     4. Evaluates pure deterministic Decision Engine (Statutory IRDAI limit, Total Loss, Auto-Approval).
-    5. Returns unified response matching frontend contract.
+    5. Saves full claim, detections, and audit trails to PostgreSQL / Supabase.
+    6. Returns unified response matching frontend contract.
     """
     start_time = time.time()
     submission_dt = datetime.now()
@@ -149,7 +174,6 @@ async def process_claim(
         doc_result, img_result = await asyncio.gather(doc_task, img_task)
 
     except Exception as e:
-        duration_ms = round((time.time() - start_time) * 1000, 2)
         logger.error(f"Upstream agent execution failed for claim '{tracking_claim_id}': {str(e)}", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
@@ -194,7 +218,6 @@ async def process_claim(
         )
     except Exception as e:
         logger.warning(f"Cost agent failure for claim '{tracking_claim_id}': {str(e)}")
-        # Gracefully handle cost agent partial failure
         from .clients.cost_agent_client import _calculate_fallback_cost_estimate
         cost_result = _calculate_fallback_cost_estimate(extracted_vehicle_meta, damage_list_for_cost, idv=policy.idv)
 
@@ -220,7 +243,6 @@ async def process_claim(
         "status": policy.status,
     }
 
-    # Format Damage Assessment section to match frontend shape
     primary_location = "Front Bumper & Lower Grille" if any("bumper" in d.get("part_name", "") for d in detections) else "Body Structure"
     formatted_damage_assessment = {
         "severity": img_result.get("overall_damage_status", "moderate"),
@@ -252,12 +274,72 @@ async def process_claim(
         base_time=submission_dt,
     )
 
-    # 8. Assemble Final Claim Process Response
+    # 8. Persist to PostgreSQL / Supabase Database
+    try:
+        claim_row = Claim(
+            claim_number=tracking_claim_id,
+            incident_date=submission_dt,
+            incident_description=damage_desc_form or "Motor damage collision intake",
+            status=decision_status,
+            status_label=status_label,
+            status_description=status_desc,
+            overall_damage_severity=img_result.get("overall_damage_status", "moderate"),
+            estimated_cost_low=cost_result.final_low,
+            estimated_cost_high=cost_result.final_high,
+            recommended_payout=float(cost_result.recommended_payout.replace("₹", "").replace(",", "")),
+            document_check_json=doc_result,
+            damage_assessment_json=formatted_damage_assessment,
+            cost_estimate_json=cost_result.model_dump(),
+        )
+        db.add(claim_row)
+        await db.flush()
+
+        # Add detected parts
+        for d in detections:
+            part_row = ClaimDetectedPart(
+                claim_id=claim_row.id,
+                part_name=d.get("part_name", ""),
+                material_type=d.get("material_type", "metal"),
+                severity=d.get("severity", "moderate"),
+                repair_or_replace=d.get("repair_or_replace", "repair"),
+                confidence=float(d.get("confidence", 0.9)),
+                bounding_box=d.get("bounding_box", {}),
+            )
+            db.add(part_row)
+
+        # Add fraud checks
+        for fc in fraud_checks:
+            fc_row = ClaimFraudCheck(
+                claim_id=claim_row.id,
+                check_name=fc.name,
+                status=fc.status,
+                detail=fc.detail,
+            )
+            db.add(fc_row)
+
+        # Add decision trails
+        for dt in decision_trail:
+            dt_row = ClaimDecisionTrail(
+                claim_id=claim_row.id,
+                step_name=dt.step,
+                outcome=dt.outcome,
+                detail=dt.detail,
+                status=dt.status,
+                timestamp=dt.timestamp,
+            )
+            db.add(dt_row)
+
+        await db.commit()
+        logger.info(f"Persisted claim '{tracking_claim_id}' successfully to database (UUID: {claim_row.id})")
+
+    except Exception as e:
+        logger.warning(f"Database write exception for claim '{tracking_claim_id}': {str(e)}")
+        # Don't fail customer response if DB commit encountered a non-fatal constraint
+        await db.rollback()
+
+    # 9. Return Unified Response
     duration_ms = round((time.time() - start_time) * 1000, 2)
-    logger.info(
-        f"Claim adjudication completed for '{tracking_claim_id}' in {duration_ms}ms. "
-        f"Final Decision: {decision_status.upper()} ({status_label})"
-    )
+    logger.info(f"Claim adjudication completed for '{tracking_claim_id}' in {duration_ms}ms")
 
     return ClaimProcessResponse(
         id=tracking_claim_id.lower().replace("-", "_"),
@@ -281,3 +363,57 @@ async def process_claim(
         fraud_checks=fraud_checks,
         decision_trail=decision_trail,
     )
+
+
+# ------------------------------------------------------------------------------
+# CLAIMS RETRIEVAL & SURVEYOR OVERRIDE ENDPOINTS
+# ------------------------------------------------------------------------------
+
+class AdminOverrideRequest(BaseModel):
+    override_status: str  # 'auto_approved', 'under_review', 'flagged'
+    review_note: str
+    settlement_adjusted_amount: Optional[float] = None
+
+
+@app.get("/claims", tags=["Claims"])
+async def list_all_claims(db: AsyncSession = Depends(get_db)):
+    """Retrieves all registered claims from the database."""
+    stmt = select(Claim).order_by(desc(Claim.created_at))
+    result = await db.execute(stmt)
+    claims = result.scalars().all()
+    return claims
+
+
+@app.post("/claims/{claim_number}/override", tags=["Admin"])
+async def apply_surveyor_override(
+    claim_number: str,
+    payload: AdminOverrideRequest,
+    current_admin: User = Depends(require_admin_role),
+    db: AsyncSession = Depends(get_db),
+):
+    """Allows an authorized Surveyor/Admin to apply a manual decision override."""
+    stmt = select(Claim).where(Claim.claim_number == claim_number)
+    result = await db.execute(stmt)
+    claim = result.scalar_one_or_none()
+
+    if not claim:
+        raise HTTPException(status_code=404, detail=f"Claim '{claim_number}' not found")
+
+    orig_status = claim.status
+    claim.status = payload.override_status
+    claim.status_label = f"Settled (Surveyor Override)" if payload.override_status == "auto_approved" else "Review (Surveyor Override)"
+    claim.status_description = f"Overridden by Surveyor {current_admin.full_name}: {payload.review_note}"
+
+    override_record = ClaimAdminOverride(
+        claim_id=claim.id,
+        admin_id=current_admin.id,
+        original_status=orig_status,
+        override_status=payload.override_status,
+        review_note=payload.review_note,
+        settlement_adjusted_amount=payload.settlement_adjusted_amount,
+    )
+    db.add(override_record)
+    await db.commit()
+
+    logger.info(f"Surveyor override applied to '{claim_number}' by {current_admin.email}")
+    return {"status": "success", "claim_number": claim_number, "new_status": payload.override_status}

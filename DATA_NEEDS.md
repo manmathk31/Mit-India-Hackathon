@@ -1,28 +1,40 @@
 # ClaimPilot AI — Data Requirements & Schema Specification
 
-This document specifies the exact database tables, columns, data types, relationships, and authentication payloads required for the Supabase Database & Auth implementation.
+This document specifies the exact database tables, columns, data types, relationships, and authentication payloads required for the PostgreSQL / Supabase Database implementation.
+
+> [!NOTE]
+> **Custom Auth Architecture**: We do NOT use Supabase's built-in email auth service because its free tier has a restrictive rate limit (4 emails/signups per hour). Instead, we use a dedicated, high-throughput `users` table with standard `bcrypt` password hashing and stateless JWT Bearer tokens issued by our FastAPI backend.
 
 ---
 
-## 1. Authentication & User Profiles
+## 1. Custom High-Throughput Authentication & User Accounts
 
-### `auth.users` (Supabase Auth built-in)
-| Field | Type | Description |
-|---|---|---|
-| `id` | `UUID` (PK) | Unique user authentication identifier |
-| `email` | `VARCHAR(255)` | User email address |
-| `created_at` | `TIMESTAMPTZ` | Timestamp of account creation |
-
-### `profiles` (User metadata & role)
+### `users` (Core Account & Role Ledger)
 | Field | Type | Constraints | Description |
 |---|---|---|---|
-| `id` | `UUID` (PK) | References `auth.users.id` ON DELETE CASCADE | Profile identifier |
+| `id` | `UUID` (PK) | DEFAULT `gen_random_uuid()` | Unique user identifier |
+| `email` | `VARCHAR(255)` | UNIQUE, NOT NULL | User email address (indexed for fast login lookup) |
+| `password_hash` | `VARCHAR(255)` | NOT NULL | Secure `bcrypt` / `argon2id` salted password hash |
 | `full_name` | `VARCHAR(150)` | NOT NULL | User's full legal name |
 | `phone_number` | `VARCHAR(20)` | NULLABLE | Contact phone number |
-| `role` | `VARCHAR(20)` | NOT NULL, DEFAULT `'claimant'` | Role: `'claimant'` or `'admin'` / `'surveyor'` |
+| `role` | `VARCHAR(20)` | NOT NULL, DEFAULT `'claimant'` | Role: `'claimant'` or `'admin'` (Surveyor) |
+| `badge_number` | `VARCHAR(50)` | NULLABLE | IRDAI surveyor license number (for `admin` role only) |
 | `avatar_url` | `TEXT` | NULLABLE | Profile picture URL |
-| `created_at` | `TIMESTAMPTZ` | DEFAULT `NOW()` | Profile creation date |
+| `is_active` | `BOOLEAN` | NOT NULL, DEFAULT `TRUE` | Account active flag |
+| `created_at` | `TIMESTAMPTZ` | DEFAULT `NOW()` | Account registration timestamp |
 | `updated_at` | `TIMESTAMPTZ` | DEFAULT `NOW()` | Profile update date |
+
+### JWT Token Payload Schema
+```json
+{
+  "sub": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "email": "rajesh.kumar@gmail.com",
+  "role": "claimant",
+  "name": "Rajesh Anand Kumar",
+  "exp": 1755819000,
+  "iat": 1755732600
+}
+```
 
 ---
 
@@ -32,7 +44,7 @@ This document specifies the exact database tables, columns, data types, relation
 | Field | Type | Constraints | Description |
 |---|---|---|---|
 | `id` | `UUID` (PK) | DEFAULT `uuid_generate_v4()` | Policy record identifier |
-| `user_id` | `UUID` | References `profiles.id` | Policyholder user reference |
+| `user_id` | `UUID` | References `users.id` | Policyholder user reference |
 | `policy_number` | `VARCHAR(50)` | UNIQUE, NOT NULL | Policy certificate number (e.g. `POL-PAC-9920194`) |
 | `holder_name` | `VARCHAR(150)` | NOT NULL | Insured owner full name |
 | `plan_name` | `VARCHAR(100)` | NOT NULL | Insurance tier (e.g. Comprehensive Zero Dep) |
@@ -57,7 +69,7 @@ This document specifies the exact database tables, columns, data types, relation
 |---|---|---|---|
 | `id` | `UUID` (PK) | DEFAULT `uuid_generate_v4()` | Internal claim ID |
 | `claim_number` | `VARCHAR(50)` | UNIQUE, NOT NULL | Public claim reference (e.g. `CLM-2026-00842`) |
-| `user_id` | `UUID` | References `profiles.id` | Claimant user ID |
+| `user_id` | `UUID` | References `users.id` | Claimant user ID |
 | `policy_id` | `UUID` | References `policies.id` | Insured policy reference |
 | `incident_date` | `TIMESTAMPTZ`| NOT NULL | Date and time of the accident |
 | `incident_location` | `VARCHAR(200)` | NULLABLE | Geographic location / city of crash |
@@ -148,7 +160,7 @@ This document specifies the exact database tables, columns, data types, relation
 |---|---|---|---|
 | `id` | `UUID` (PK) | DEFAULT `uuid_generate_v4()` | Override ID |
 | `claim_id` | `UUID` | References `claims.id` ON DELETE CASCADE | Associated claim |
-| `admin_id` | `UUID` | References `profiles.id` | Reviewing surveyor/manager |
+| `admin_id` | `UUID` | References `users.id` | Reviewing surveyor/manager |
 | `original_status` | `VARCHAR(30)` | NOT NULL | AI-recommended status |
 | `override_status` | `VARCHAR(30)` | NOT NULL | Human-assigned status: `'auto_approved'`, `'under_review'`, `'flagged'` |
 | `review_note` | `TEXT` | NOT NULL | Surveyor's mandatory review rationale |

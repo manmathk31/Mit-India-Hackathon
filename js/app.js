@@ -209,7 +209,16 @@ function renderCurrentView() {
     return;
   }
 
-  // 2. Main View Routing
+  // 2. Strict Role-Based Route Guard
+  const user = AppState.currentUser;
+  const isAdmin = user && user.role === 'admin';
+
+  if ((AppState.currentView === 'admin-dashboard' || AppState.currentView === 'admin-claim-detail') && !isAdmin) {
+    showToast('Access Denied: Surveyor / Admin credentials required.');
+    AppState.currentView = user ? 'user-dashboard' : 'login';
+  }
+
+  // 3. Main View Routing
   switch (AppState.currentView) {
     case 'login':
       renderLoginView(container);
@@ -329,14 +338,35 @@ function fillLoginCredentials(role) {
   }
 }
 
-function handleLoginSubmit(event) {
+async function handleLoginSubmit(event) {
   event.preventDefault();
   const email = document.getElementById('login-email').value.trim();
+  const password = document.getElementById('login-password').value;
   const btn = document.getElementById('login-submit-btn');
 
   btn.innerHTML = `<span class="inline-block w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span> <span>Verifying credentials...</span>`;
   btn.disabled = true;
 
+  try {
+    const res = await fetch('http://localhost:8000/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      localStorage.setItem('claimpilot_token', data.access_token);
+      AppState.currentUser = data.user;
+      showToast(`Welcome back, ${data.user.name}!`);
+      navigateTo(data.user.role === 'admin' ? 'admin-dashboard' : 'user-dashboard');
+      return;
+    }
+  } catch (err) {
+    console.warn("Backend auth offline, using local session:", err);
+  }
+
+  // Graceful fallback for offline / standalone preview
   setTimeout(() => {
     if (email.includes('admin') || email.includes('claimpilot.ai') || email === MOCK_USERS.admin.email) {
       AppState.currentUser = MOCK_USERS.admin;
@@ -347,7 +377,7 @@ function handleLoginSubmit(event) {
       showToast(`Welcome back, Rajesh Kumar!`);
       navigateTo('user-dashboard');
     }
-  }, 600);
+  }, 500);
 }
 
 function renderSignupView(container) {
@@ -392,7 +422,7 @@ function renderSignupView(container) {
   `;
 }
 
-function handleSignupSubmit(event) {
+async function handleSignupSubmit(event) {
   event.preventDefault();
   const name = document.getElementById('signup-name').value.trim();
   const email = document.getElementById('signup-email').value.trim();
@@ -402,6 +432,25 @@ function handleSignupSubmit(event) {
   if (pass1 !== pass2) {
     alert("Passwords do not match. Please re-enter.");
     return;
+  }
+
+  try {
+    const res = await fetch('http://localhost:8000/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password: pass1, full_name: name, role: 'claimant' })
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      localStorage.setItem('claimpilot_token', data.access_token);
+      AppState.currentUser = data.user;
+      showToast('Account registered in database successfully!');
+      navigateTo('user-dashboard');
+      return;
+    }
+  } catch (err) {
+    console.warn("Backend signup offline, using local session:", err);
   }
 
   AppState.currentUser = {
