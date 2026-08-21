@@ -3,7 +3,7 @@ import httpx
 
 from ..config import settings
 from ..logger import logger
-from ..schemas import CostReconciliation, CostSource
+from ..schemas import CostReconciliation
 
 
 class CostAgentClientError(Exception):
