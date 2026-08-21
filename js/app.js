@@ -312,7 +312,7 @@ function renderLoginView(container) {
 
 async function fetchLiveClaims() {
   try {
-    const res = await fetch('http://localhost:8000/claims');
+    const res = await fetch('/claims');
     if (res.ok) {
       const liveList = await res.json();
       if (Array.isArray(liveList)) {
@@ -335,7 +335,7 @@ async function handleLoginSubmit(event) {
   btn.disabled = true;
 
   try {
-    const res = await fetch('http://localhost:8000/auth/login', {
+    const res = await fetch('/auth/login', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password })
@@ -356,7 +356,7 @@ async function handleLoginSubmit(event) {
       alert(`Login Failed: ${errData.detail || 'Invalid email or password'}`);
     }
   } catch (err) {
-    alert(`Connection Error: Unable to reach auth service at http://localhost:8000`);
+    alert(`Connection Error: Unable to reach auth service. Please check your network.`);
   }
 
   btn.innerHTML = `<span>Sign In to ClaimPilot</span> <i data-lucide="arrow-right" class="w-4 h-4"></i>`;
@@ -419,7 +419,7 @@ async function handleSignupSubmit(event) {
   }
 
   try {
-    const res = await fetch('http://localhost:8000/auth/signup', {
+    const res = await fetch('/auth/signup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ email, password: pass1, full_name: name, role: 'claimant' })
@@ -437,7 +437,7 @@ async function handleSignupSubmit(event) {
       return;
     }
   } catch (err) {
-    alert(`Connection Error: Unable to reach auth service at http://localhost:8000`);
+    alert(`Connection Error: Unable to reach auth service. Please check your network.`);
   }
 }
 
@@ -1683,7 +1683,7 @@ async function startAiProcessing() {
     };
     formData.append('policy_record', JSON.stringify(policyPayload));
 
-    const res = await fetch('http://localhost:8000/claims/process', {
+    const res = await fetch('/claims/process', {
       method: 'POST',
       body: formData
     });
