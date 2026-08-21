@@ -68,9 +68,22 @@ def _calculate_fallback_cost_estimate(
         parts_total += part_cost
         labour_total += labour_cost
 
-    if parts_total == 0 and labour_total == 0:
-        parts_total = 8900.0
-        labour_total = 4200.0
+    if not damage_list or (parts_total == 0 and labour_total == 0):
+        return CostReconciliation(
+            final_low=0.0,
+            final_high=0.0,
+            formatted_final="₹0",
+            recommended_payout="₹0",
+            currency="INR",
+            confidence="high",
+            confidence_label="No Damage Detected",
+            sources=[],
+            reasoning="Computer vision inspection detected 0 damaged vehicle parts. No repair payout recommended.",
+            disclaimer="Visual inspection found no component structural or cosmetic damage on uploaded photos.",
+            total_loss_flag=False,
+            parts_cost_total=0.0,
+            labour_cost_total=0.0,
+        )
 
     subtotal = parts_total + labour_total
     low_bound = round(subtotal * 0.88, -2)

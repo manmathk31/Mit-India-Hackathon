@@ -322,13 +322,13 @@ def verify_dl_and_incident_validity(
     norm_dl = dl_number.strip().upper()
 
     # 1. DL Number & Format Verification
-    if not norm_dl or len(normalize_alphanumeric(norm_dl)) < 6:
+    if not norm_dl or "UNREADABLE" in norm_dl or "MISSING" in norm_dl or "NOT_EXTRACTED" in norm_dl or len(normalize_alphanumeric(norm_dl)) < 6:
         dl_num_res = FieldVerificationResult(
             name="dl_number",
-            value=norm_dl or "NOT_EXTRACTED",
-            confidence=0.2,
+            value="Unreadable / Missing",
+            confidence=0.10,
             status="warning",
-            note="Driving Licence number missing or unreadable",
+            note="Driving Licence number could not be read or extracted from document",
             isResolved=False,
         )
     else:
@@ -342,46 +342,56 @@ def verify_dl_and_incident_validity(
         )
 
     # 2. DL Expiration Check (Current date + Loss date)
-    parsed_expiry = parse_date_flexible(expiry_date_str)
-    parsed_incident = parse_date_flexible(incident_date_str) if incident_date_str else None
-
-    if not parsed_expiry:
+    if not expiry_date_str or "UNREADABLE" in expiry_date_str.upper() or "MISSING" in expiry_date_str.upper() or "NOT_EXTRACTED" in expiry_date_str.upper():
         dl_exp_res = FieldVerificationResult(
             name="dl_validity",
-            value=expiry_date_str or "UNPARSEABLE",
-            confidence=0.4,
+            value="Unreadable / Missing",
+            confidence=0.10,
             status="warning",
-            note=f"Could not parse or verify DL expiry date '{expiry_date_str}'",
-            isResolved=False,
-        )
-    elif parsed_incident and parsed_expiry < parsed_incident:
-        # Crucial Insurance Rule: DL was expired on the date the crash happened!
-        dl_exp_res = FieldVerificationResult(
-            name="dl_validity",
-            value=parsed_expiry.isoformat(),
-            confidence=0.99,
-            status="warning",
-            note=f"FRAUD/POLICY BREACH: Driving Licence expired on {parsed_expiry.strftime('%d-%b-%Y')}, which is BEFORE the incident date {parsed_incident.strftime('%d-%b-%Y')}. Claim is void.",
-            isResolved=False,
-        )
-    elif parsed_expiry < ref_date:
-        dl_exp_res = FieldVerificationResult(
-            name="dl_validity",
-            value=parsed_expiry.isoformat(),
-            confidence=0.98,
-            status="warning",
-            note=f"Driving Licence expired on {parsed_expiry.strftime('%d-%b-%Y')}. Driver licence is currently invalid.",
+            note="Driving Licence expiry date could not be read or verified from document",
             isResolved=False,
         )
     else:
-        dl_exp_res = FieldVerificationResult(
-            name="dl_validity",
-            value=parsed_expiry.isoformat(),
-            confidence=0.98,
-            status="verified",
-            note=f"Driving Licence is valid (expires on {parsed_expiry.strftime('%d-%b-%Y')})",
-            isResolved=False,
-        )
+        parsed_expiry = parse_date_flexible(expiry_date_str)
+        parsed_incident = parse_date_flexible(incident_date_str) if incident_date_str else None
+
+        if not parsed_expiry:
+            dl_exp_res = FieldVerificationResult(
+                name="dl_validity",
+                value=expiry_date_str,
+                confidence=0.20,
+                status="warning",
+                note=f"Could not parse or verify DL expiry date '{expiry_date_str}'",
+                isResolved=False,
+            )
+        elif parsed_incident and parsed_expiry < parsed_incident:
+            # Crucial Insurance Rule: DL was expired on the date the crash happened!
+            dl_exp_res = FieldVerificationResult(
+                name="dl_validity",
+                value=parsed_expiry.isoformat(),
+                confidence=0.99,
+                status="warning",
+                note=f"FRAUD/POLICY BREACH: Driving Licence expired on {parsed_expiry.strftime('%d-%b-%Y')}, which is BEFORE the incident date {parsed_incident.strftime('%d-%b-%Y')}. Claim is void.",
+                isResolved=False,
+            )
+        elif parsed_expiry < ref_date:
+            dl_exp_res = FieldVerificationResult(
+                name="dl_validity",
+                value=parsed_expiry.isoformat(),
+                confidence=0.98,
+                status="warning",
+                note=f"Driving Licence expired on {parsed_expiry.strftime('%d-%b-%Y')}. Driver licence is currently invalid.",
+                isResolved=False,
+            )
+        else:
+            dl_exp_res = FieldVerificationResult(
+                name="dl_validity",
+                value=parsed_expiry.isoformat(),
+                confidence=0.98,
+                status="verified",
+                note=f"Driving Licence is valid (expires on {parsed_expiry.strftime('%d-%b-%Y')})",
+                isResolved=False,
+            )
 
     return dl_num_res, dl_exp_res
 

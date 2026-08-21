@@ -52,45 +52,45 @@ class DocumentVerificationResponse(BaseModel):
 
 # Granular Raw Extraction Structures with Per-Field Confidences
 class ExtractedRCDocument(BaseModel):
-    owner_name: str
-    owner_name_confidence: float = 0.95
-    rc_number: str
-    rc_number_confidence: float = 0.95
-    chassis_number: str
-    chassis_number_confidence: float = 0.95
+    owner_name: str = "Unreadable / Missing"
+    owner_name_confidence: float = 0.10
+    rc_number: str = "Unreadable / Missing"
+    rc_number_confidence: float = 0.10
+    chassis_number: str = "Unreadable / Missing"
+    chassis_number_confidence: float = 0.10
     engine_number: Optional[str] = ""
-    make: str
-    model: str
-    variant: str
-    registration_year: int
-    plate_number: str
+    make: str = "Unknown Make"
+    model: str = "Unknown Model"
+    variant: str = "Standard"
+    registration_year: int = 2021
+    plate_number: str = "Unreadable / Missing"
     document_type_detected: str = "RC"
-    confidence: float = 0.95
+    confidence: float = 0.10
 
 
 class ExtractedDLDocument(BaseModel):
-    dl_number: str
-    dl_number_confidence: float = 0.95
-    holder_name: str
-    holder_name_confidence: float = 0.95
-    expiry_date: str  # e.g. "2028-11-20" or "20/11/2028"
-    expiry_date_confidence: float = 0.95
+    dl_number: str = "Unreadable / Missing"
+    dl_number_confidence: float = 0.10
+    holder_name: str = "Unreadable / Missing"
+    holder_name_confidence: float = 0.10
+    expiry_date: str = "Unreadable / Missing"
+    expiry_date_confidence: float = 0.10
     issue_date: Optional[str] = ""
-    vehicle_classes: Optional[List[str]] = Field(default_factory=list)  # e.g. ["LMV", "MCWG"]
+    vehicle_classes: Optional[List[str]] = Field(default_factory=list)
     document_type_detected: str = "DL"
-    confidence: float = 0.95
+    confidence: float = 0.10
 
 
 class ExtractedClaimFormDocument(BaseModel):
-    claimant_name: str
-    claimant_name_confidence: float = 0.95
+    claimant_name: str = "Unreadable / Missing"
+    claimant_name_confidence: float = 0.10
     vehicle_number: Optional[str] = ""
     policy_number: Optional[str] = ""
-    incident_date: Optional[str] = ""  # Date of loss/accident
-    damage_description: str
-    damage_description_confidence: float = 0.95
+    incident_date: Optional[str] = ""
+    damage_description: str = "No damage description parsed from uploaded document"
+    damage_description_confidence: float = 0.10
     document_type_detected: str = "CLAIM_FORM"
-    confidence: float = 0.95
+    confidence: float = 0.10
 
 
 class RawExtractedDocuments(BaseModel):

@@ -102,15 +102,22 @@ def evaluate_claim_decision(
     # --------------------------------------------------------------------------
     # Step 3: Damage Assessment Evaluation
     # --------------------------------------------------------------------------
-    img_status = damage_assessment.get("overall_damage_status", "moderate")
+    img_status = damage_assessment.get("overall_damage_status", "none")
     detections_count = len(damage_assessment.get("detections", []))
-    location_label = damage_assessment.get("location_label", "Front Impact Zone")
+    location_label = damage_assessment.get("location_label", "Visual Inspection")
+
+    if detections_count == 0:
+        damage_outcome = "No physical damage detected"
+        damage_detail = "Computer vision pipeline detected zero damaged components on uploaded photos"
+    else:
+        damage_outcome = f"{img_status.capitalize()} damage, {location_label.lower()}"
+        damage_detail = f"Vision pipeline isolated {detections_count} damaged parts with high confidence"
 
     decision_trail.append(
         DecisionTrailEntry(
             step="Damage Assessment",
-            outcome=f"{img_status.capitalize()} damage, {location_label.lower()}",
-            detail=f"Vision pipeline isolated {detections_count} damaged parts with high confidence",
+            outcome=damage_outcome,
+            detail=damage_detail,
             status="completed",
             timestamp=format_ts(12),
         )
@@ -122,11 +129,18 @@ def evaluate_claim_decision(
     cost_conf = cost_estimate.confidence
     recommended_str = cost_estimate.recommended_payout
 
+    if cost_estimate.final_high == 0 or recommended_str == "₹0":
+        cost_outcome = "Zero repair payout (₹0)"
+        cost_detail = "No physical vehicle damage identified to estimate repair costs"
+    else:
+        cost_outcome = f"{cost_conf.capitalize()} agreement across sources"
+        cost_detail = f"Multi-agent pricing converged at {recommended_str}"
+
     decision_trail.append(
         DecisionTrailEntry(
             step="Cost Reconciliation",
-            outcome=f"{cost_conf.capitalize()} agreement across sources",
-            detail=f"Multi-agent pricing converged at {recommended_str}",
+            outcome=cost_outcome,
+            detail=cost_detail,
             status="completed",
             timestamp=format_ts(18),
         )

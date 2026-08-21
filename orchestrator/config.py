@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     IRDAI_MAX_AUTO_APPROVAL_LIMIT: float = 50000.0  # Mandatory ₹50,000 threshold for physical surveyor inspection
 
     # Timeouts and Client Resilience
-    HTTP_TIMEOUT_SECONDS: float = 35.0
+    HTTP_TIMEOUT_SECONDS: float = 60.0
     CLIENT_RETRIES: int = 2
 
     model_config = SettingsConfigDict(

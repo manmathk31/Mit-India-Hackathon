@@ -395,12 +395,19 @@ async def _call_full_vision_api(
         raise ExtractionAPIError("API key for vision provider is not configured.")
 
     prompt = """
-Extract all fields with per-field confidence scores (0.0 to 1.0) from the 3 motor insurance documents:
-Image 1: Registration Certificate (RC)
-Image 2: Driving Licence (DL)
-Image 3: Claim Intimation Form
+You are an expert Indian motor insurance document reader.
+Analyze the 3 uploaded claim document images:
+Image 1: Vehicle Registration Certificate (RC)
+Image 2: Driver's Driving Licence (DL)
+Image 3: Claim Intimation Form (which may be handwritten, typed, or a filled-in paper form)
 
-Return strictly valid JSON:
+Guidelines:
+1. Documents may be printed, typed, or handwritten. Read all visible text carefully.
+2. If text is handwritten but legible, extract it and assign confidence between 0.70 and 0.95.
+3. If a field is illegible, obscured, or absent from the image, set its string value to "Unreadable / Missing" and set its confidence to 0.10.
+4. Do NOT hallucinate or invent missing vehicle numbers or dates.
+
+Return strictly valid JSON matching this structure:
 {
   "rc": {
     "owner_name": "string", "owner_name_confidence": 0.95,
@@ -436,9 +443,15 @@ Return strictly valid JSON:
         async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
             res = await client.post(url, json=payload)
             if res.status_code != 200:
-                raise ExtractionAPIError(f"Gemini API returned HTTP {res.status_code}: {res.text}")
-            raw = res.json()["candidates"][0]["content"]["parts"][0]["text"]
-            return json.loads(re.sub(r"^```json\s*|\s*```$", "", raw.strip()))
+                logger.warning(f"Vision API returned HTTP {res.status_code}: {res.text}")
+                return {"rc": {}, "dl": {}, "claim_form": {}}
+            try:
+                raw = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                cleaned_json = re.sub(r"^```json\s*|\s*```$", "", raw.strip())
+                return json.loads(cleaned_json)
+            except Exception as parse_err:
+                logger.warning(f"Could not parse Vision API JSON: {parse_err}")
+                return {"rc": {}, "dl": {}, "claim_form": {}}
     else:
         # OpenAI vision
         payload = {
@@ -491,104 +504,101 @@ async def extract_documents(
     fallback_count = 0
     th = settings.OCR_CONFIDENCE_FALLBACK_THRESHOLD
 
-    # 2. Primary Extraction (Local OCR first)
+    rc_data = {}
+    dl_data = {}
+    form_data = {}
+
+    # 2. Primary Extraction
     if settings.PRIMARY_OCR_ENGINE == "local":
         logger.info("Executing Primary Layer: Local OCR extraction")
         rc_text, rc_conf = _run_local_tesseract_ocr(rc_bytes)
         dl_text, dl_conf = _run_local_tesseract_ocr(dl_bytes)
         form_text, form_conf = _run_local_tesseract_ocr(claim_form_bytes)
 
-        rc_data = _parse_rc_locally(rc_text, rc_conf)
-        dl_data = _parse_dl_locally(dl_text, dl_conf)
-        form_data = _parse_claim_form_locally(form_text, form_conf)
+        # If local OCR failed to extract meaningful text (e.g. non-standard image, handwriting, or missing tesseract)
+        total_text_len = len(rc_text.strip()) + len(dl_text.strip()) + len(form_text.strip())
+        if total_text_len < 20:
+            logger.info("Local OCR returned minimal text. Elevating directly to Full Vision API.")
+            extracted_dict = await _call_full_vision_api(rc_bytes, dl_bytes, claim_form_bytes)
+            rc_data = extracted_dict.get("rc", {}) or {}
+            dl_data = extracted_dict.get("dl", {}) or {}
+            form_data = extracted_dict.get("claim_form", {}) or {}
+            fallback_count += 1
+        else:
+            rc_data = _parse_rc_locally(rc_text, rc_conf)
+            dl_data = _parse_dl_locally(dl_text, dl_conf)
+            form_data = _parse_claim_form_locally(form_text, form_conf)
     else:
         logger.info("Executing Primary Layer: Full Vision API extraction")
         extracted_dict = await _call_full_vision_api(rc_bytes, dl_bytes, claim_form_bytes)
-        rc_data = extracted_dict.get("rc", {})
-        dl_data = extracted_dict.get("dl", {})
-        form_data = extracted_dict.get("claim_form", {})
+        rc_data = extracted_dict.get("rc", {}) or {}
+        dl_data = extracted_dict.get("dl", {}) or {}
+        form_data = extracted_dict.get("claim_form", {}) or {}
 
-    # 3. Selective LLM Fallback: check each field and trigger LLM ONLY if low confidence (< 0.85)
-    
-    # Check RC Owner Name
-    if rc_data.get("owner_name_confidence", 0.0) < th or not rc_data.get("owner_name"):
-        fallback_res = await _run_selective_llm_disambiguation(
-            rc_bytes, "Registration Certificate (RC)", "owner_name",
-            rc_data.get("owner_name", ""), rc_data.get("owner_name_confidence", 0.0),
-            context_hint=policy_hint.owner_name if policy_hint else "",
-        )
-        rc_data["owner_name"] = fallback_res.get("repaired_value", rc_data.get("owner_name"))
-        rc_data["owner_name_confidence"] = fallback_res.get("confidence", 0.92)
-        fallback_count += 1
+    # 3. Selective LLM Disambiguation (Only if running on local OCR results with specific gaps)
+    if fallback_count == 0:
+        tasks = []
+        task_keys = []
 
-    # Check RC Number / Plate
-    if rc_data.get("rc_number_confidence", 0.0) < th or not rc_data.get("rc_number"):
-        fallback_res = await _run_selective_llm_disambiguation(
-            rc_bytes, "Registration Certificate (RC)", "rc_number",
-            rc_data.get("rc_number", ""), rc_data.get("rc_number_confidence", 0.0),
-            context_hint=policy_hint.rc_number if policy_hint else "",
-        )
-        rc_data["rc_number"] = fallback_res.get("repaired_value", rc_data.get("rc_number"))
-        rc_data["rc_number_confidence"] = fallback_res.get("confidence", 0.95)
-        rc_data["plate_number"] = rc_data["rc_number"]
-        fallback_count += 1
+        if rc_data.get("owner_name_confidence", 0.0) < th or not rc_data.get("owner_name"):
+            tasks.append(_run_selective_llm_disambiguation(
+                rc_bytes, "Registration Certificate (RC)", "owner_name",
+                rc_data.get("owner_name", ""), rc_data.get("owner_name_confidence", 0.0),
+                context_hint=policy_hint.owner_name if policy_hint else "",
+            ))
+            task_keys.append(("rc", "owner_name", "owner_name_confidence"))
 
-    # Check RC Chassis Number
-    if rc_data.get("chassis_number_confidence", 0.0) < th or not rc_data.get("chassis_number"):
-        fallback_res = await _run_selective_llm_disambiguation(
-            rc_bytes, "Registration Certificate (RC)", "chassis_number",
-            rc_data.get("chassis_number", ""), rc_data.get("chassis_number_confidence", 0.0),
-            context_hint=policy_hint.chassis_number if policy_hint else "",
-        )
-        rc_data["chassis_number"] = fallback_res.get("repaired_value", rc_data.get("chassis_number"))
-        rc_data["chassis_number_confidence"] = fallback_res.get("confidence", 0.95)
-        fallback_count += 1
+        if rc_data.get("rc_number_confidence", 0.0) < th or not rc_data.get("rc_number"):
+            tasks.append(_run_selective_llm_disambiguation(
+                rc_bytes, "Registration Certificate (RC)", "rc_number",
+                rc_data.get("rc_number", ""), rc_data.get("rc_number_confidence", 0.0),
+                context_hint=policy_hint.rc_number if policy_hint else "",
+            ))
+            task_keys.append(("rc", "rc_number", "rc_number_confidence"))
 
-    # Check DL Number
-    if dl_data.get("dl_number_confidence", 0.0) < th or not dl_data.get("dl_number"):
-        fallback_res = await _run_selective_llm_disambiguation(
-            dl_bytes, "Driving Licence (DL)", "dl_number",
-            dl_data.get("dl_number", ""), dl_data.get("dl_number_confidence", 0.0),
-        )
-        dl_data["dl_number"] = fallback_res.get("repaired_value", dl_data.get("dl_number"))
-        dl_data["dl_number_confidence"] = fallback_res.get("confidence", 0.95)
-        fallback_count += 1
+        if rc_data.get("chassis_number_confidence", 0.0) < th or not rc_data.get("chassis_number"):
+            tasks.append(_run_selective_llm_disambiguation(
+                rc_bytes, "Registration Certificate (RC)", "chassis_number",
+                rc_data.get("chassis_number", ""), rc_data.get("chassis_number_confidence", 0.0),
+                context_hint=policy_hint.chassis_number if policy_hint else "",
+            ))
+            task_keys.append(("rc", "chassis_number", "chassis_number_confidence"))
 
-    # Check DL Expiry Date
-    if dl_data.get("expiry_date_confidence", 0.0) < th or not dl_data.get("expiry_date"):
-        fallback_res = await _run_selective_llm_disambiguation(
-            dl_bytes, "Driving Licence (DL)", "expiry_date",
-            dl_data.get("expiry_date", ""), dl_data.get("expiry_date_confidence", 0.0),
-        )
-        dl_data["expiry_date"] = fallback_res.get("repaired_value", dl_data.get("expiry_date"))
-        dl_data["expiry_date_confidence"] = fallback_res.get("confidence", 0.95)
-        fallback_count += 1
+        if dl_data.get("dl_number_confidence", 0.0) < th or not dl_data.get("dl_number"):
+            tasks.append(_run_selective_llm_disambiguation(
+                dl_bytes, "Driving Licence (DL)", "dl_number",
+                dl_data.get("dl_number", ""), dl_data.get("dl_number_confidence", 0.0),
+            ))
+            task_keys.append(("dl", "dl_number", "dl_number_confidence"))
 
-    # Check DL Holder Name
-    if dl_data.get("holder_name_confidence", 0.0) < th or not dl_data.get("holder_name"):
-        fallback_res = await _run_selective_llm_disambiguation(
-            dl_bytes, "Driving Licence (DL)", "holder_name",
-            dl_data.get("holder_name", ""), dl_data.get("holder_name_confidence", 0.0),
-            context_hint=policy_hint.owner_name if policy_hint else "",
-        )
-        dl_data["holder_name"] = fallback_res.get("repaired_value", dl_data.get("holder_name"))
-        dl_data["holder_name_confidence"] = fallback_res.get("confidence", 0.92)
-        fallback_count += 1
+        if dl_data.get("expiry_date_confidence", 0.0) < th or not dl_data.get("expiry_date"):
+            tasks.append(_run_selective_llm_disambiguation(
+                dl_bytes, "Driving Licence (DL)", "expiry_date",
+                dl_data.get("expiry_date", ""), dl_data.get("expiry_date_confidence", 0.0),
+            ))
+            task_keys.append(("dl", "expiry_date", "expiry_date_confidence"))
 
-    # Check Claim Form Damage Description
-    if form_data.get("damage_description_confidence", 0.0) < th or not form_data.get("damage_description"):
-        fallback_res = await _run_selective_llm_disambiguation(
-            claim_form_bytes, "Claim Intimation Form", "damage_description",
-            form_data.get("damage_description", ""), form_data.get("damage_description_confidence", 0.0),
-        )
-        form_data["damage_description"] = fallback_res.get("repaired_value", form_data.get("damage_description"))
-        form_data["damage_description_confidence"] = fallback_res.get("confidence", 0.92)
-        fallback_count += 1
+        if len(tasks) > 0:
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+            for (doc_type, val_key, conf_key), res in zip(task_keys, results):
+                if isinstance(res, dict):
+                    target = rc_data if doc_type == "rc" else dl_data
+                    target[val_key] = res.get("repaired_value", target.get(val_key, "Unreadable / Missing"))
+                    target[conf_key] = res.get("confidence", 0.85)
+                    fallback_count += 1
 
-    # 4. Construct Final Structured Output
+    # Ensure required plate_number mapping
+    if "plate_number" not in rc_data or not rc_data["plate_number"]:
+        rc_data["plate_number"] = rc_data.get("rc_number", "Unreadable / Missing")
+
+    # 4. Construct Final Structured Output with safe Pydantic parsing
+    clean_rc = {k: v for k, v in rc_data.items() if k in ExtractedRCDocument.model_fields}
+    clean_dl = {k: v for k, v in dl_data.items() if k in ExtractedDLDocument.model_fields}
+    clean_form = {k: v for k, v in form_data.items() if k in ExtractedClaimFormDocument.model_fields}
+
     return RawExtractedDocuments(
-        rc=ExtractedRCDocument(**rc_data),
-        dl=ExtractedDLDocument(**dl_data),
-        claim_form=ExtractedClaimFormDocument(**form_data),
+        rc=ExtractedRCDocument(**clean_rc),
+        dl=ExtractedDLDocument(**clean_dl),
+        claim_form=ExtractedClaimFormDocument(**clean_form),
         fallback_invocations_count=fallback_count,
     )

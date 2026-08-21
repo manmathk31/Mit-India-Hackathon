@@ -7,13 +7,21 @@
 // 1. APPLICATION STATE & ROUTER
 // ==============================================================================
 
+const savedUserRaw = localStorage.getItem('claimpilot_user');
+let initialUser = null;
+try {
+  initialUser = savedUserRaw ? JSON.parse(savedUserRaw) : null;
+} catch (e) {
+  initialUser = null;
+}
+
 const AppState = {
-  // Authentication & Persona: null by default (requires login/signup)
-  currentUser: null,
+  // Authentication & Persona: restored from localStorage session
+  currentUser: initialUser,
   token: localStorage.getItem('claimpilot_token') || null,
   
-  // Navigation Router: starts on 'login'
-  currentView: 'login',
+  // Navigation Router: maintains dashboard view if logged in
+  currentView: initialUser ? (initialUser.role === 'admin' ? 'admin-dashboard' : 'user-dashboard') : 'login',
   selectedClaimId: null,
   
   // Live Database Claims (fetched from PostgreSQL via API)
@@ -42,9 +50,11 @@ const AppState = {
 };
 
 // Initialize Application
-document.addEventListener('DOMContentLoaded', () => {
-  // Restore session or default to claimant dashboard
-  if (!AppState.currentUser) {
+document.addEventListener('DOMContentLoaded', async () => {
+  // Restore session and fetch live database claims if logged in
+  if (AppState.currentUser) {
+    await fetchLiveClaims();
+  } else {
     AppState.currentView = 'login';
   }
   renderApp();
@@ -168,6 +178,7 @@ function handleLogout() {
   AppState.token = null;
   AppState.claims = [];
   localStorage.removeItem('claimpilot_token');
+  localStorage.removeItem('claimpilot_user');
   showToast('Signed out successfully');
   navigateTo('login');
 }
@@ -333,6 +344,7 @@ async function handleLoginSubmit(event) {
     if (res.ok) {
       const data = await res.json();
       localStorage.setItem('claimpilot_token', data.access_token);
+      localStorage.setItem('claimpilot_user', JSON.stringify(data.user));
       AppState.token = data.access_token;
       AppState.currentUser = data.user;
       showToast(`Welcome back, ${data.user.name}!`);
@@ -416,8 +428,11 @@ async function handleSignupSubmit(event) {
     if (res.ok) {
       const data = await res.json();
       localStorage.setItem('claimpilot_token', data.access_token);
+      localStorage.setItem('claimpilot_user', JSON.stringify(data.user));
+      AppState.token = data.access_token;
       AppState.currentUser = data.user;
       showToast('Account registered in database successfully!');
+      await fetchLiveClaims();
       navigateTo('user-dashboard');
       return;
     }
@@ -1056,7 +1071,7 @@ function renderClaimDetailView(container, claimId, isAdminView = false) {
               </div>
 
               <span class="text-xs font-bold font-mono px-2.5 py-1 rounded-full ${claim.document_check.overall_status === 'verified' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : (claim.document_check.overall_status === 'resolved' ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-rose-50 text-rose-800 border border-rose-200')}">
-                ${claim.document_check.confidence_score}% Score
+                ${Math.round(claim.document_check.confidence_score <= 1.0 ? claim.document_check.confidence_score * 100 : claim.document_check.confidence_score)}% Score
               </span>
             </div>
 
@@ -1134,7 +1149,7 @@ function renderClaimDetailView(container, claimId, isAdminView = false) {
             <!-- Detected Parts Breakdown -->
             <div class="space-y-2">
               <span class="text-[11px] font-bold text-slate-500 uppercase tracking-wider">Identified Component Damage</span>
-              ${claim.damage_assessment.detected_parts.map(dp => `
+              ${claim.damage_assessment.detected_parts && claim.damage_assessment.detected_parts.length > 0 ? claim.damage_assessment.detected_parts.map(dp => `
                 <div class="flex items-center justify-between p-2.5 rounded-xl bg-white/70 border border-slate-200/60 text-xs">
                   <div>
                     <div class="font-bold text-slate-800">${dp.part}</div>
@@ -1144,7 +1159,11 @@ function renderClaimDetailView(container, claimId, isAdminView = false) {
                     ${dp.confidence}
                   </span>
                 </div>
-              `).join('')}
+              `).join('') : `
+                <div class="p-3.5 rounded-xl bg-white/60 border border-slate-200 text-xs text-slate-500 text-center">
+                  Zero physical damage detected across all uploaded photos.
+                </div>
+              `}
             </div>
           </div>
 
@@ -1193,7 +1212,7 @@ function renderClaimDetailView(container, claimId, isAdminView = false) {
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-6">
-          ${(claim.cost_estimate.sources || []).map(s => `
+          ${claim.cost_estimate.sources && claim.cost_estimate.sources.length > 0 ? claim.cost_estimate.sources.map(s => `
             <div class="p-4 rounded-2xl bg-white/80 border border-slate-200/70 hover:shadow-md transition-all">
               <div class="flex items-center justify-between mb-2">
                 <span class="text-xs font-bold text-slate-800">${s.label}</span>
@@ -1202,7 +1221,11 @@ function renderClaimDetailView(container, claimId, isAdminView = false) {
               <div class="text-lg font-bold font-mono text-slate-900">${s.formatted}</div>
               <p class="text-[11px] text-slate-500 mt-1">${s.desc}</p>
             </div>
-          `).join('')}
+          `).join('') : `
+            <div class="col-span-3 p-4 rounded-2xl bg-white/70 border border-slate-200 text-center text-xs text-slate-500">
+              No repair estimation required — visual inspection confirmed zero damaged components on vehicle.
+            </div>
+          `}
         </div>
 
         <div class="mt-5 pt-4 border-t border-slate-200/60 text-xs text-slate-500">
