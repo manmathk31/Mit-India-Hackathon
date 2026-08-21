@@ -210,16 +210,7 @@ async def process_claim(
         )
 
     # 4. Extract vehicle specs and damage items for Cost Agent
-    raw_v_meta = doc_result.get("extracted_vehicle_meta", {})
-    if not raw_v_meta or "Unreadable" in str(raw_v_meta.get("make", "")) or "Unknown" in str(raw_v_meta.get("make", "")):
-        extracted_vehicle_meta = {
-            "make": "Maruti Suzuki",
-            "model": "Swift",
-            "variant": "VXI",
-            "registration_year": 2021,
-        }
-    else:
-        extracted_vehicle_meta = raw_v_meta
+    extracted_vehicle_meta = doc_result.get("extracted_vehicle_meta", {})
 
     detections = img_result.get("detections", [])
     damage_list_for_cost = [
