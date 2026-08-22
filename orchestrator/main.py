@@ -305,10 +305,16 @@ async def process_claim(
             overall_damage_severity=img_result.get("overall_damage_status", "moderate"),
             estimated_cost_low=cost_result.final_low,
             estimated_cost_high=cost_result.final_high,
-            recommended_payout=float(cost_result.recommended_payout.replace("₹", "").replace(",", "")),
+            recommended_payout=cost_result.final_low,  # Store low-end as the conservative payout float
             document_check_json=doc_result,
             damage_assessment_json=formatted_damage_assessment,
-            cost_estimate_json=cost_result.model_dump(),
+            cost_estimate_json={
+                **cost_result.model_dump(),
+                "final_low": cost_result.final_low,
+                "final_high": cost_result.final_high,
+                "recommended_payout": cost_result.recommended_payout,
+                "formatted_final": cost_result.formatted_final,
+            },
         )
         db.add(claim_row)
         await db.flush()
@@ -378,7 +384,13 @@ async def process_claim(
         policy=policy_dict,
         document_check=doc_result,
         damage_assessment=formatted_damage_assessment,
-        cost_estimate=cost_result.model_dump(),
+        cost_estimate={
+            **cost_result.model_dump(),
+            "final_low": cost_result.final_low,
+            "final_high": cost_result.final_high,
+            "recommended_payout": cost_result.recommended_payout,
+            "formatted_final": cost_result.formatted_final,
+        },
         fraud_checks=fraud_checks,
         decision_trail=decision_trail,
     )

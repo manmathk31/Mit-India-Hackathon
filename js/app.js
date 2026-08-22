@@ -1481,10 +1481,23 @@ function renderSubmissionScreen(container) {
           </div>
 
           <div class="flex justify-end pt-4 border-t border-slate-100">
-            <button onclick="handleStep1Next()" class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 cursor-pointer">
-              <span>Next: Damage Photos</span>
-              <i data-lucide="arrow-right" class="w-4 h-4"></i>
-            </button>
+            ${docsCount < 3 ? `
+              <div class="flex items-center gap-3 ml-auto">
+                <span class="text-xs text-amber-700 font-semibold flex items-center gap-1.5">
+                  <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i>
+                  ${3 - docsCount} document${3 - docsCount > 1 ? 's' : ''} still needed
+                </span>
+                <button disabled class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 opacity-40 cursor-not-allowed">
+                  <span>Next: Damage Photos</span>
+                  <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                </button>
+              </div>
+            ` : `
+              <button onclick="handleStep1Next()" class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 cursor-pointer">
+                <span>Next: Damage Photos</span>
+                <i data-lucide="arrow-right" class="w-4 h-4"></i>
+              </button>
+            `}
           </div>
         </div>
       ` : ''}
@@ -1535,10 +1548,23 @@ function renderSubmissionScreen(container) {
             <button onclick="goToStep(1)" class="px-4 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl cursor-pointer">
               Back
             </button>
-            <button onclick="handleStep2Next()" class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 cursor-pointer">
-              <span>Next: Review &amp; Submit</span>
-              <i data-lucide="arrow-right" class="w-4 h-4"></i>
-            </button>
+            ${photosCount === 0 ? `
+              <div class="flex items-center gap-3">
+                <span class="text-xs text-amber-700 font-semibold flex items-center gap-1.5">
+                  <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i>
+                  At least 1 photo required
+                </span>
+                <button disabled class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 opacity-40 cursor-not-allowed">
+                  <span>Next: Review &amp; Submit</span>
+                  <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                </button>
+              </div>
+            ` : `
+              <button onclick="handleStep2Next()" class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 cursor-pointer">
+                <span>Next: Review &amp; Submit</span>
+                <i data-lucide="arrow-right" class="w-4 h-4"></i>
+              </button>
+            `}
           </div>
         </div>
       ` : ''}
@@ -1557,17 +1583,54 @@ function renderSubmissionScreen(container) {
             </p>
           </div>
 
-          <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 max-w-md mx-auto text-left text-xs space-y-2">
-            <div class="flex justify-between text-slate-600"><span>Attached Documents:</span> <strong class="text-slate-900">${docsCount} Attached</strong></div>
-            <div class="flex justify-between text-slate-600"><span>Vehicle Damage Photos:</span> <strong class="text-slate-900">${photosCount} Views Captured</strong></div>
-            <div class="flex justify-between text-slate-600"><span>Claimant Policy:</span> <strong class="text-slate-900">${AppState.currentUser?.email || 'Active Policyholder'}</strong></div>
+          <!-- Pre-flight checklist -->
+          <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 max-w-md mx-auto text-left text-xs space-y-2.5">
+            <div class="flex items-center justify-between">
+              <span class="text-slate-600 flex items-center gap-1.5">
+                <i data-lucide="${docsCount === 3 ? 'check-circle-2' : 'alert-circle'}" class="w-3.5 h-3.5 ${docsCount === 3 ? 'text-emerald-600' : 'text-amber-500'}"></i>
+                Attached Documents:
+              </span>
+              <strong class="${docsCount === 3 ? 'text-emerald-700' : 'text-amber-700'}">${docsCount}/3 Required</strong>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-slate-600 flex items-center gap-1.5">
+                <i data-lucide="${photosCount >= 1 ? 'check-circle-2' : 'alert-circle'}" class="w-3.5 h-3.5 ${photosCount >= 1 ? 'text-emerald-600' : 'text-amber-500'}"></i>
+                Vehicle Damage Photos:
+              </span>
+              <strong class="${photosCount >= 1 ? 'text-emerald-700' : 'text-amber-700'}">${photosCount} Uploaded ${photosCount === 0 ? '(min 1 required)' : ''}</strong>
+            </div>
+            <div class="flex items-center justify-between">
+              <span class="text-slate-600 flex items-center gap-1.5">
+                <i data-lucide="check-circle-2" class="w-3.5 h-3.5 text-emerald-600"></i>
+                Claimant Policy:
+              </span>
+              <strong class="text-slate-900">${AppState.currentUser?.email || 'Active Policyholder'}</strong>
+            </div>
           </div>
+
+          <!-- Block launch if requirements not met -->
+          ${(docsCount < 3 || photosCount === 0) ? `
+            <div class="max-w-md mx-auto p-3.5 rounded-2xl bg-amber-50 border border-amber-300 flex items-start gap-3 text-left">
+              <i data-lucide="triangle-alert" class="w-5 h-5 text-amber-600 shrink-0 mt-0.5"></i>
+              <div>
+                <p class="text-xs font-bold text-amber-900">Cannot launch — requirements not met</p>
+                <ul class="text-xs text-amber-800 mt-1 space-y-0.5 list-disc list-inside">
+                  ${docsCount < 3 ? `<li>${3 - docsCount} required document(s) missing — go back to Step 1</li>` : ''}
+                  ${photosCount === 0 ? '<li>At least 1 damage photo required — go back to Step 2</li>' : ''}
+                </ul>
+              </div>
+            </div>
+          ` : ''}
 
           <div class="flex justify-center gap-3 pt-2">
             <button onclick="goToStep(2)" class="px-5 py-3 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl cursor-pointer">
               Back
             </button>
-            <button onclick="startAiProcessing()" class="btn-indigo text-white px-8 py-3.5 rounded-2xl font-bold text-sm shadow-xl flex items-center gap-2 cursor-pointer">
+            <button
+              onclick="${(docsCount < 3 || photosCount === 0) ? 'void(0)' : 'startAiProcessing()'}"
+              ${(docsCount < 3 || photosCount === 0) ? 'disabled' : ''}
+              class="btn-indigo text-white px-8 py-3.5 rounded-2xl font-bold text-sm shadow-xl flex items-center gap-2 ${(docsCount < 3 || photosCount === 0) ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}"
+            >
               <i data-lucide="play" class="w-4 h-4 text-amber-300 fill-amber-300"></i>
               <span>Launch Autonomous Settlement</span>
             </button>
@@ -1585,10 +1648,31 @@ function goToStep(s) {
 }
 
 function handleStep1Next() {
+  const { rc, dl, claimForm } = AppState.uploads.docs;
+  const missing = [];
+  if (!rc)        missing.push('Registration Certificate (RC)');
+  if (!dl)        missing.push('Driving Licence (DL)');
+  if (!claimForm) missing.push('Claim Intimation Form');
+
+  if (missing.length > 0) {
+    showValidationToast(
+      `Missing ${missing.length} document${missing.length > 1 ? 's' : ''}`,
+      `Please upload: ${missing.join(', ')}`
+    );
+    return; // Block navigation
+  }
   goToStep(2);
 }
 
 function handleStep2Next() {
+  const photoCount = Object.values(AppState.uploads.photos).filter(Boolean).length;
+  if (photoCount === 0) {
+    showValidationToast(
+      'No damage photos uploaded',
+      'Upload at least 1 vehicle damage photo (front, rear, left side, or right side) to proceed.'
+    );
+    return; // Block navigation
+  }
   goToStep(3);
 }
 
@@ -1650,21 +1734,27 @@ async function startAiProcessing() {
   navigateTo('claim-processing');
   
   const stages = [
-    { title: "Document Agent", desc: "Running local OCR & Sarathi validation..." },
-    { title: "Damage Assessment Agent", desc: "Isolating component boundaries & depth with YOLO..." },
-    { title: "Cost Engine", desc: "Reconciling live OEM parts & labour..." },
-    { title: "Fraud & Anomaly Suite", desc: "Validating perceptual image hashes & plate parity..." },
-    { title: "Deterministic Decision Engine", desc: "Evaluating IRDAI statutory criteria..." }
+    { title: "Document Agent",             desc: "Running local OCR & Sarathi validation on RC, DL & Claim Form..." },
+    { title: "Damage Assessment Agent",    desc: "Isolating component boundaries & severity with YOLO + Gemini Vision..." },
+    { title: "Cost Engine",               desc: "Reconciling live OEM parts, depreciation & labour costs..." },
+    { title: "Fraud & Anomaly Suite",     desc: "Validating perceptual image hashes & plate cross-checks..." },
+    { title: "Deterministic Decision Engine", desc: "Evaluating IRDAI statutory criteria & settlement decision..." }
   ];
 
   let current = 0;
+  // Stage timer: 8-second intervals to reflect real pipeline timing (~40s total)
   const stageTimer = setInterval(() => {
     current++;
     const progressEl = document.getElementById('processing-progress-bar');
     const stageEl = document.getElementById('processing-stage-text');
-    if (progressEl) progressEl.style.width = `${Math.min(95, (current / stages.length) * 100)}%`;
+    if (progressEl) progressEl.style.width = `${Math.min(90, 10 + (current / stages.length) * 80)}%`;
     if (stageEl && stages[current]) stageEl.innerText = stages[current].desc;
-  }, 400);
+    if (current >= stages.length - 1) clearInterval(stageTimer); // Stop cycling at last stage
+  }, 8000); // 8s per stage matches typical Gemini + OCR pipeline
+
+  // AbortController: auto-abort after 3.5 minutes (210s) — prevents infinite browser hang
+  const abortController = new AbortController();
+  const abortTimeout = setTimeout(() => abortController.abort(), 210000);
 
   try {
     const formData = new FormData();
@@ -1689,9 +1779,11 @@ async function startAiProcessing() {
 
     const res = await fetch('/claims/process', {
       method: 'POST',
-      body: formData
+      body: formData,
+      signal: abortController.signal,
     });
 
+    clearTimeout(abortTimeout);
     clearInterval(stageTimer);
 
     if (res.ok) {
@@ -1714,12 +1806,18 @@ async function startAiProcessing() {
       showPipelineError('Adjudication Pipeline Failed', errMsg, 'pipeline_error');
     }
   } catch (err) {
+    clearTimeout(abortTimeout);
     clearInterval(stageTimer);
     console.error("Adjudication API error:", err);
+
+    // Distinguish timeout from network error for better user guidance
+    const isTimeout = err.name === 'AbortError';
     showPipelineError(
-      'Connection Error',
-      `Could not reach the backend orchestrator. Please check your network and try again.`,
-      'network_error',
+      isTimeout ? 'Processing Timeout' : 'Connection Error',
+      isTimeout
+        ? 'The AI pipeline took longer than expected (>3.5 minutes). This usually happens when the Gemini API is slow or unavailable. Please retry in a moment.'
+        : `Could not reach the backend orchestrator. Please check your network and try again.`,
+      isTimeout ? 'timeout_error' : 'network_error',
       err.message
     );
   }
@@ -1967,3 +2065,26 @@ function showToast(message) {
   setTimeout(() => lucide.createIcons(), 20);
   setTimeout(() => toast.classList.add('hidden'), 3200);
 }
+
+/**
+ * Amber validation toast — shown when the user tries to proceed with missing uploads.
+ * Displays a bold title + descriptive detail for clarity.
+ */
+function showValidationToast(title, detail) {
+  const toast = document.getElementById('app-toast');
+  if (!toast) return;
+
+  toast.innerHTML = `
+    <div class="bg-amber-950 text-white px-4 py-3 rounded-2xl shadow-2xl border border-amber-700 flex items-start gap-2.5 text-xs font-semibold animate-fade-in-up max-w-sm">
+      <i data-lucide="alert-triangle" class="w-4 h-4 text-amber-400 shrink-0 mt-0.5"></i>
+      <div>
+        <div class="font-bold text-amber-200">${title}</div>
+        <div class="text-amber-300/90 font-normal mt-0.5 leading-relaxed">${detail}</div>
+      </div>
+    </div>
+  `;
+  toast.classList.remove('hidden');
+  setTimeout(() => lucide.createIcons(), 20);
+  setTimeout(() => toast.classList.add('hidden'), 4500);
+}
+

@@ -98,6 +98,35 @@ class CostReconciliation(BaseModel):
     totalLoss: Optional[TotalLossCheck] = None
     partBreakdown: Optional[List[PartCostResult]] = None
 
+    @property
+    def final_low(self) -> float:
+        """Lower bound of total repair estimate (parts + labour min)."""
+        if self.combinedTotal:
+            return float(self.combinedTotal.min)
+        if self.partsCost:
+            return float(self.partsCost.totalPartsCost)
+        return 0.0
+
+    @property
+    def final_high(self) -> float:
+        """Upper bound of total repair estimate (parts + labour max)."""
+        if self.combinedTotal:
+            return float(self.combinedTotal.max)
+        if self.partsCost:
+            return float(self.partsCost.totalPartsCost * 1.15)
+        return 0.0
+
+    @property
+    def recommended_payout(self) -> str:
+        """Formatted INR string of the recommended settlement payout (midpoint)."""
+        mid = (self.final_low + self.final_high) / 2.0
+        return f"₹{mid:,.0f}"
+
+    @property
+    def formatted_final(self) -> str:
+        """Formatted INR range string for the frontend cost table."""
+        return f"₹{self.final_low:,.0f} – ₹{self.final_high:,.0f}"
+
 
 # Final Required Output Shape (Frontend API Contract)
 class ClaimProcessResponse(BaseModel):

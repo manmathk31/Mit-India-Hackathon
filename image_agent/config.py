@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # Timeouts & Rate-Limit Resilience
     REQUEST_TIMEOUT_SECONDS: float = 25.0
-    MAX_RETRIES: int = 3
+    MAX_RETRIES: int = 1  # Reduced: retrying a timed-out vision call per photo is wasteful
     RATE_LIMIT_BACKOFF_FACTOR: float = 2.0
     MAX_CONCURRENT_CALLS: int = 5
 

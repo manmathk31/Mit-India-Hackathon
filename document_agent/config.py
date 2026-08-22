@@ -37,12 +37,12 @@ class Settings(BaseSettings):
     
     # Timeouts & Rate-Limit Resilience
     REQUEST_TIMEOUT_SECONDS: float = 20.0
-    MAX_RETRIES: int = 3
+    MAX_RETRIES: int = 1  # Reduced: retrying a timed-out Gemini call is rarely useful
     RATE_LIMIT_BACKOFF_FACTOR: float = 2.0  # Exponential backoff base (seconds)
     MAX_CONCURRENT_LLM_CALLS: int = 5       # Concurrency limiter to protect 15 RPM ceiling
 
     # Tiered Selective LLM Fallback Threshold: ONLY fields with confidence < 70% trigger LLM
-    OCR_CONFIDENCE_FALLBACK_THRESHOLD: float = 0.70
+    OCR_CONFIDENCE_FALLBACK_THRESHOLD: float = 0.55
 
     # Verification & Matching Thresholds (Deterministic rapidfuzz)
     FUZZY_EXACT_THRESHOLD: float = 98.0

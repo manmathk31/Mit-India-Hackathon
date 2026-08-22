@@ -553,11 +553,10 @@ async def extract_documents(
         dl_data = extracted_dict.get("dl", {}) or {}
         form_data = extracted_dict.get("claim_form", {}) or {}
 
-    # 3. Selective LLM Disambiguation
+    # 3. Selective LLM Disambiguation — run all 3 documents IN PARALLEL for 3x speedup
     if settings.PRIMARY_OCR_ENGINE == "local":
         async def _disambiguate_doc(data_dict: Dict[str, Any], doc_type: str, img_bytes: bytes, hint: str):
-            nonlocal fallback_count
-            tasks = []
+            """Runs LLM fallback for low-confidence fields in a single document."""
             keys = []
             for k, v in list(data_dict.items()):
                 if k.endswith("_confidence"):
@@ -567,33 +566,42 @@ async def extract_documents(
                     if conf < th and field_name != "confidence":
                         keys.append((field_name, str(val), float(conf)))
             
-            # Fail-Fast Heuristic: If more than 3 fields are unreadable, it is likely a fake/unrelated document 
-            # (like a notebook page) or completely illegible. Firing LLMs for all fields will cause a rate-limit timeout.
-            if len(keys) > 3:
-                logger.warning(f"[{doc_type}] {len(keys)} fields are unreadable. Skipping LLM to prevent rate-limit timeout. Failing fast.")
+            # Fail-Fast: if >=3 fields are unreadable, the image is likely invalid or non-document.
+            # Calling LLM for 3+ fields per doc costs too many API credits and time.
+            if len(keys) >= 3:
+                logger.warning(f"[{doc_type}] {len(keys)} low-conf fields. Skipping LLM disambiguation (fail-fast). Image may be low-quality or non-standard.")
                 return
 
-            for field_name, val, conf in keys:
-                tasks.append(
-                    _run_selective_llm_disambiguation(
-                        img_bytes, doc_type, field_name, val, conf, context_hint=hint
-                    )
+            tasks = [
+                _run_selective_llm_disambiguation(
+                    img_bytes, doc_type, field_name, val, conf, context_hint=hint
                 )
+                for field_name, val, conf in keys
+            ]
 
             if tasks:
-                results = await asyncio.gather(*tasks)
+                results = await asyncio.gather(*tasks, return_exceptions=True)
                 for res in results:
-                    fname = res["field_name"]
-                    data_dict[fname] = res["repaired_value"]
-                    data_dict[fname + "_confidence"] = res["confidence"]
-                    fallback_count += 1
+                    if isinstance(res, Exception):
+                        logger.warning(f"[{doc_type}] LLM disambiguation task failed: {res}")
+                        continue
+                    fname = res.get("field_name")
+                    if fname:
+                        data_dict[fname] = res["repaired_value"]
+                        data_dict[fname + "_confidence"] = res["confidence"]
 
+        # Run disambiguation for all 3 documents IN PARALLEL (not sequentially)
+        disambig_tasks = []
         if rc_data:
-            await _disambiguate_doc(rc_data, "RC", rc_bytes, policy_hint.vehicle_number if policy_hint else "")
+            disambig_tasks.append(_disambiguate_doc(rc_data, "RC", rc_bytes, policy_hint.vehicle_number if policy_hint and hasattr(policy_hint, 'vehicle_number') else (policy_hint.rc_number if policy_hint else "")))
         if dl_data:
-            await _disambiguate_doc(dl_data, "DL", dl_bytes, "")
+            disambig_tasks.append(_disambiguate_doc(dl_data, "DL", dl_bytes, ""))
         if form_data:
-            await _disambiguate_doc(form_data, "CLAIM_FORM", claim_form_bytes, "")
+            disambig_tasks.append(_disambiguate_doc(form_data, "CLAIM_FORM", claim_form_bytes, ""))
+
+        if disambig_tasks:
+            await asyncio.gather(*disambig_tasks, return_exceptions=True)
+            fallback_count += len(disambig_tasks)
     # Ensure required plate_number mapping
     if "plate_number" not in rc_data or not rc_data["plate_number"]:
         rc_data["plate_number"] = rc_data.get("rc_number", "Unreadable / Missing")
