@@ -379,7 +379,7 @@ function renderSignupView(container) {
       <div class="glass-card rounded-3xl p-8 border border-white/90 shadow-2xl">
         <div class="text-center mb-6">
           <h1 class="text-2xl font-extrabold font-display text-slate-900">Create Claimant Account</h1>
-          <p class="text-xs text-slate-500 mt-1">Instant registration for autonomous motor insurance settlement</p>
+          <p class="text-xs text-slate-500 mt-1">Instant registration for autonomous motor insurance claim processing</p>
         </div>
 
         <form onsubmit="handleSignupSubmit(event)" class="space-y-3.5">
@@ -496,7 +496,7 @@ function renderUserDashboardView(container) {
             Welcome back, ${user.name}
           </h1>
           <p class="text-sm text-slate-500 mt-1">
-            Track your autonomous motor claim settlements, document validations, and live payouts.
+            Track your autonomous motor claims, document validations, and live adjudication.
           </p>
         </div>
 
@@ -1556,10 +1556,10 @@ function renderSubmissionScreen(container) {
           <div class="flex items-center justify-between">
             <div>
               <h2 class="text-lg font-bold font-display text-slate-900">Step 2: Upload Vehicle Damage Photos</h2>
-              <p class="text-xs text-slate-500">All 4 standard angles are mandatory for 360° damage triangulation</p>
+              <p class="text-xs text-slate-500">All 4 standard angles are mandatory — only genuine vehicle damage photos allowed</p>
             </div>
-            <span class="text-xs font-semibold px-3 py-1 rounded-full ${photosCount === 4 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}">
-              ${photosCount}/4 Mandatory Angles
+            <span class="text-xs font-semibold px-3 py-1 rounded-full ${photosCount === 4 && Object.values(AppState.uploads.photos).every(p => p?.is_vehicle !== false && !p?.validating) ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}">
+              ${Object.values(AppState.uploads.photos).filter(p => p?.is_vehicle === true).length}/4 Verified Angles
             </span>
           </div>
 
@@ -1567,24 +1567,51 @@ function renderSubmissionScreen(container) {
             ${['front', 'rear', 'leftSide', 'rightSide'].map(slot => {
               const uploadedPhoto = AppState.uploads.photos[slot];
               const isCaptured = Boolean(uploadedPhoto);
+              const isValidating = uploadedPhoto?.validating;
+              const isInvalid = uploadedPhoto?.is_vehicle === false;
+              const isValid = uploadedPhoto?.is_vehicle === true;
               const labels = { front: 'Front Damage', rear: 'Rear Profile', leftSide: 'Left Side', rightSide: 'Right Side' };
 
+              let borderClass = 'border-dashed border-slate-300 bg-white/70 hover:border-indigo-400';
+              if (isValidating) {
+                borderClass = 'border-amber-400 bg-amber-50/40 animate-pulse';
+              } else if (isInvalid) {
+                borderClass = 'border-rose-500 bg-rose-50/50 shadow-sm shadow-rose-100';
+              } else if (isValid) {
+                borderClass = 'border-emerald-500 bg-emerald-50/40';
+              }
+
               return `
-                <div class="p-4 rounded-2xl border-2 ${isCaptured ? 'border-emerald-500 bg-emerald-50/40' : 'border-dashed border-slate-300 bg-white/70 hover:border-indigo-400'} flex flex-col justify-between aspect-square text-center transition-all overflow-hidden relative">
+                <div class="p-4 rounded-2xl border-2 ${borderClass} flex flex-col justify-between aspect-square text-center transition-all overflow-hidden relative">
                   ${isCaptured && uploadedPhoto.preview ? `
-                    <img src="${uploadedPhoto.preview}" alt="${labels[slot]}" class="absolute inset-0 w-full h-full object-cover opacity-30 pointer-events-none" />
+                    <img src="${uploadedPhoto.preview}" alt="${labels[slot]}" class="absolute inset-0 w-full h-full object-cover ${isInvalid ? 'opacity-20 grayscale' : 'opacity-30'} pointer-events-none" />
                   ` : ''}
                   <div class="relative z-10">
                     <div class="text-xs font-bold text-slate-800 flex items-center justify-center gap-1">
                       ${labels[slot]}
                       <span class="text-rose-500 text-xs">*</span>
                     </div>
-                    <div class="text-[10px] text-slate-500 mt-0.5 truncate">${isCaptured ? (uploadedPhoto.name || 'Photo Attached') : 'Required Angle'}</div>
+                    
+                    ${isValidating ? `
+                      <div class="text-[10px] text-amber-700 font-semibold mt-1 animate-pulse">Scanning vehicle...</div>
+                    ` : isInvalid ? `
+                      <div class="text-[10px] text-rose-700 font-bold mt-1">⚠️ Not a Vehicle</div>
+                      <div class="text-[9px] text-rose-600 mt-0.5 leading-tight px-0.5 truncate">${uploadedPhoto.error || 'Non-vehicle image'}</div>
+                    ` : isValid ? `
+                      <div class="text-[10px] text-emerald-700 font-semibold mt-1">✓ Verified Vehicle Photo</div>
+                      <div class="text-[9px] text-slate-500 truncate max-w-[120px] mx-auto mt-0.5">${uploadedPhoto.name}</div>
+                    ` : `
+                      <div class="text-[10px] text-slate-500 mt-0.5 truncate">Required Angle</div>
+                    `}
                   </div>
 
                   <div class="mt-2 relative z-10">
                     <input type="file" id="input-photo-${slot}" accept="image/*" onchange="handleRealPhotoUpload(event, '${slot}')" class="hidden" />
-                    ${isCaptured ? `
+                    ${isInvalid ? `
+                      <button onclick="document.getElementById('input-photo-${slot}').click()" class="px-2 py-1 text-[11px] font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-lg shadow-xs cursor-pointer">
+                        Retake Vehicle Photo
+                      </button>
+                    ` : isCaptured ? `
                       <button onclick="clearPhoto('${slot}')" class="text-xs font-bold text-rose-600 hover:underline">Retake</button>
                     ` : `
                       <button onclick="document.getElementById('input-photo-${slot}').click()" class="px-2.5 py-1 text-xs font-bold text-indigo-900 bg-white border border-indigo-200 rounded-xl shadow-xs hover:bg-indigo-50 cursor-pointer">
@@ -1601,11 +1628,15 @@ function renderSubmissionScreen(container) {
             <button onclick="goToStep(1)" class="px-4 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl cursor-pointer">
               Back
             </button>
-            ${photosCount < 4 ? `
+            ${(photosCount < 4 || Object.values(AppState.uploads.photos).some(p => p?.is_vehicle === false || p?.validating)) ? `
               <div class="flex items-center gap-3">
                 <span class="text-xs text-amber-700 font-semibold flex items-center gap-1.5">
                   <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i>
-                  ${4 - photosCount} angle photo${4 - photosCount > 1 ? 's' : ''} remaining (All 4 required)
+                  ${Object.values(AppState.uploads.photos).some(p => p?.is_vehicle === false)
+                    ? 'Replace non-vehicle photos to proceed'
+                    : Object.values(AppState.uploads.photos).some(p => p?.validating)
+                    ? 'Verifying vehicle images...'
+                    : `${4 - photosCount} angle photo${4 - photosCount > 1 ? 's' : ''} remaining (All 4 required)`}
                 </span>
                 <button disabled class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 opacity-40 cursor-not-allowed">
                   <span>Next: Review &amp; Submit</span>
@@ -1683,12 +1714,12 @@ function renderSubmissionScreen(container) {
               Back
             </button>
             <button
-              onclick="${(docsCount < 3 || Object.values(AppState.uploads.docs).some(d => d?.valid === false) || photosCount < 4) ? 'void(0)' : 'startAiProcessing()'}"
-              ${(docsCount < 3 || Object.values(AppState.uploads.docs).some(d => d?.valid === false) || photosCount < 4) ? 'disabled' : ''}
-              class="btn-indigo text-white px-8 py-3.5 rounded-2xl font-bold text-sm shadow-xl flex items-center gap-2 ${(docsCount < 3 || Object.values(AppState.uploads.docs).some(d => d?.valid === false) || photosCount < 4) ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}"
+              onclick="${(docsCount < 3 || Object.values(AppState.uploads.docs).some(d => d?.valid === false) || photosCount < 4 || Object.values(AppState.uploads.photos).some(p => p?.is_vehicle === false)) ? 'void(0)' : 'startAiProcessing()'}"
+              ${(docsCount < 3 || Object.values(AppState.uploads.docs).some(d => d?.valid === false) || photosCount < 4 || Object.values(AppState.uploads.photos).some(p => p?.is_vehicle === false)) ? 'disabled' : ''}
+              class="btn-indigo text-white px-8 py-3.5 rounded-2xl font-bold text-sm shadow-xl flex items-center gap-2 ${(docsCount < 3 || Object.values(AppState.uploads.docs).some(d => d?.valid === false) || photosCount < 4 || Object.values(AppState.uploads.photos).some(p => p?.is_vehicle === false)) ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}"
             >
               <i data-lucide="play" class="w-4 h-4 text-amber-300 fill-amber-300"></i>
-              <span>Launch Autonomous Settlement</span>
+              <span>Launch Autonomous Claim Processing</span>
             </button>
           </div>
         </div>
@@ -1742,10 +1773,10 @@ function handleStep1Next() {
 function handleStep2Next() {
   const photos = AppState.uploads.photos;
   const missing = [];
-  if (!photos.front) missing.push('Front Damage');
-  if (!photos.rear) missing.push('Rear Profile');
-  if (!photos.leftSide) missing.push('Left Side');
-  if (!photos.rightSide) missing.push('Right Side');
+  if (!photos.front || !photos.front.file) missing.push('Front Damage');
+  if (!photos.rear || !photos.rear.file) missing.push('Rear Profile');
+  if (!photos.leftSide || !photos.leftSide.file) missing.push('Left Side');
+  if (!photos.rightSide || !photos.rightSide.file) missing.push('Right Side');
 
   if (missing.length > 0) {
     showValidationToast(
@@ -1754,6 +1785,25 @@ function handleStep2Next() {
     );
     return;
   }
+
+  const invalidPhotos = Object.entries(AppState.uploads.photos).filter(([k, v]) => v?.is_vehicle === false);
+  if (invalidPhotos.length > 0) {
+    showValidationToast(
+      'Invalid Vehicle Photo Detected',
+      'One or more uploaded images do not appear to be motor vehicles (e.g. birds, animals, or non-vehicle objects). Please upload valid vehicle damage photos.'
+    );
+    return;
+  }
+
+  const validatingPhotos = Object.values(AppState.uploads.photos).filter(p => p?.validating);
+  if (validatingPhotos.length > 0) {
+    showValidationToast(
+      'Photo Still Scanning',
+      'Please wait a moment for vehicle image verification to finish.'
+    );
+    return;
+  }
+
   goToStep(3);
 }
 
@@ -1799,7 +1849,6 @@ async function handleRealFileUpload(event, docKey) {
         renderApp();
       }
     } else {
-      // If validation endpoint is unavailable, mark as tentatively valid
       if (AppState.uploads.docs[docKey]) {
         AppState.uploads.docs[docKey].validating = false;
         AppState.uploads.docs[docKey].valid = true;
@@ -1821,18 +1870,61 @@ function clearDocUpload(docKey) {
   renderApp();
 }
 
-function handleRealPhotoUpload(event, slot) {
+async function handleRealPhotoUpload(event, slot) {
   const file = event.target.files[0];
   if (!file) return;
+
   const reader = new FileReader();
-  reader.onload = (e) => {
+  reader.onload = async (e) => {
     AppState.uploads.photos[slot] = {
       name: file.name,
       preview: e.target.result,
-      file: file
+      file: file,
+      validating: true,
+      is_vehicle: null,
+      error: null,
     };
     renderApp();
-    showToast(`Captured ${file.name}`);
+
+    // Call fast vehicle photo verification
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const res = await fetch('/images/validate-single', {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (AppState.uploads.photos[slot] && AppState.uploads.photos[slot].file === file) {
+          AppState.uploads.photos[slot].validating = false;
+          AppState.uploads.photos[slot].is_vehicle = Boolean(data.is_vehicle);
+          if (data.is_vehicle) {
+            AppState.uploads.photos[slot].detected_subject = data.detected_subject;
+            showToast(`✓ Verified vehicle photo for ${slot}`);
+          } else {
+            AppState.uploads.photos[slot].error = data.reason || `Detected ${data.detected_subject || 'non-vehicle'}, not a vehicle.`;
+            showValidationToast('Non-Vehicle Image Detected', AppState.uploads.photos[slot].error);
+          }
+          renderApp();
+        }
+      } else {
+        if (AppState.uploads.photos[slot]) {
+          AppState.uploads.photos[slot].validating = false;
+          AppState.uploads.photos[slot].is_vehicle = true;
+          renderApp();
+        }
+      }
+    } catch (err) {
+      console.warn("Vehicle photo validation probe failed:", err);
+      if (AppState.uploads.photos[slot]) {
+        AppState.uploads.photos[slot].validating = false;
+        AppState.uploads.photos[slot].is_vehicle = true;
+        renderApp();
+      }
+    }
   };
   reader.readAsDataURL(file);
 }
@@ -2041,7 +2133,7 @@ function renderProcessingScreen(container) {
       </div>
 
       <div>
-        <h2 class="text-2xl font-bold font-display text-slate-900">Autonomous Settlement in Progress</h2>
+        <h2 class="text-2xl font-bold font-display text-slate-900">Autonomous Claim Processing in Progress</h2>
         <p id="processing-stage-text" class="text-xs text-slate-500 mt-1">Concurrently querying Document, Vision, and Cost agents...</p>
       </div>
 

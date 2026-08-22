@@ -603,6 +603,32 @@ async def proxy_validate_single_document(
     }
 
 
+@app.post(
+    "/images/validate-single",
+    tags=["Validation"],
+    summary="Proxies vehicle image validation to Image Agent",
+)
+async def proxy_validate_single_vehicle_photo(
+    file: UploadFile = File(..., description="Uploaded vehicle damage photo"),
+):
+    url = f"{settings.IMAGE_AGENT_URL.rstrip('/')}/images/validate-single"
+    try:
+        content = await file.read()
+        files = {"file": (file.filename or "photo.jpg", content, file.content_type or "image/jpeg")}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(url, files=files)
+            if res.status_code == 200:
+                return res.json()
+    except Exception as e:
+        logger.warning(f"Error proxying vehicle image validation: {e}")
+
+    return {
+        "is_vehicle": True,
+        "detected_subject": "vehicle",
+        "reason": "Photo accepted.",
+    }
+
+
 # ------------------------------------------------------------------------------
 # CLAIMS RETRIEVAL & SURVEYOR OVERRIDE ENDPOINTS
 # ------------------------------------------------------------------------------

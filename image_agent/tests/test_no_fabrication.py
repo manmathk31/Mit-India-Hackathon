@@ -30,3 +30,12 @@ def test_damage_detection_validation():
             bounding_box=BoundingBox(x=0, y=0, w=10, h=10),
             source_image_index=0,
         )
+
+
+@pytest.mark.asyncio
+async def test_validate_single_vehicle_photo_corrupted():
+    """Corrupted photo bytes must be rejected."""
+    from image_agent.extractor import validate_single_vehicle_photo
+    res = await validate_single_vehicle_photo(b"not-an-image")
+    assert res["is_vehicle"] is False
+    assert res["detected_subject"] == "invalid_image"

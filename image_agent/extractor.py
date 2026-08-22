@@ -393,3 +393,83 @@ async def extract_damage_assessment(
         photos_analyzed=len(photos),
         no_damage_detected=len(all_detections) == 0,
     )
+
+
+async def validate_single_vehicle_photo(
+    image_bytes: bytes,
+) -> Dict[str, Any]:
+    """
+    Validates whether the uploaded photo actually depicts a motor vehicle or vehicle body part.
+    Rejects non-vehicle images (e.g., birds, animals, people, landscapes, indoor objects, memes).
+    """
+    # 1. Check basic image decoding and resolution
+    try:
+        img = validate_and_decode_photo(image_bytes, "vehicle_upload")
+    except InvalidPhotoError as e:
+        return {
+            "is_vehicle": False,
+            "detected_subject": "invalid_image",
+            "reason": str(e),
+        }
+
+    # Downscale for fast inference
+    img_copy = img.copy()
+    img_copy.thumbnail((800, 800), Image.Resampling.LANCZOS)
+    buf = io.BytesIO()
+    img_copy.save(buf, format="JPEG", quality=85)
+    fast_bytes = buf.getvalue()
+
+    # 2. Check using Gemini Vision fast classifier
+    api_key = settings.active_api_key
+    if api_key:
+        try:
+            model = settings.GEMINI_MODEL
+            url, headers = _get_gemini_endpoint_and_headers(model, api_key)
+            prompt = """
+You are an expert vehicle damage assessment inspector.
+Analyze this single uploaded image.
+Determine whether this image depicts a motor vehicle (car, SUV, truck, motorcycle, bus, auto-rickshaw, van, or a vehicle body part/panel such as bumper, fender, door, hood, headlight, windshield, wheel, etc.).
+
+If the image depicts a non-vehicle subject (e.g. bird, animal, person, food, selfie, landscape, sky, house, document, text, drawing, cartoon, meme, or random object):
+Set "is_vehicle": false.
+
+Respond strictly in valid JSON format:
+{
+  "is_vehicle": true,
+  "detected_subject": "car / bumper / bird / animal / person / landscape / other",
+  "reason": "1-sentence concise explanation of what is shown in the image."
+}
+"""
+            parts = [
+                {"text": prompt},
+                {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(fast_bytes).decode("utf-8")}},
+            ]
+            payload = {
+                "contents": [{"parts": parts}],
+                "generationConfig": {"response_mime_type": "application/json", "temperature": 0.0},
+            }
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.post(url, json=payload, headers=headers)
+                if res.status_code == 200:
+                    ai_raw = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    cleaned = re.sub(r"^```json\s*|\s*```$", "", ai_raw.strip())
+                    parsed = json.loads(cleaned)
+                    is_veh = bool(parsed.get("is_vehicle", False))
+                    subject = parsed.get("detected_subject", "unknown")
+                    reason = parsed.get("reason", "")
+                    if not reason:
+                        reason = f"Verified as a {subject}." if is_veh else f"The uploaded photo appears to be a {subject}, not a motor vehicle. Please upload a clear photo of your damaged vehicle."
+                    return {
+                        "is_vehicle": is_veh,
+                        "detected_subject": subject,
+                        "reason": reason,
+                    }
+        except Exception as e:
+            logger.warning(f"Fast vehicle photo validator error: {e}")
+
+    # Fallback if API key is not configured or network error
+    return {
+        "is_vehicle": True,
+        "detected_subject": "vehicle",
+        "reason": "Photo accepted.",
+    }

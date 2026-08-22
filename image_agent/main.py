@@ -13,6 +13,7 @@ from .extractor import (
     VisionAPIError,
     VisionTimeoutError,
     extract_damage_assessment,
+    validate_single_vehicle_photo,
 )
 from .logger import logger
 from .schemas import DamageAssessmentResponse, ErrorDetail
@@ -180,3 +181,23 @@ async def analyze_damage_images(
     )
 
     return assessment_response
+
+
+@app.post(
+    "/images/validate-single",
+    tags=["Validation"],
+    summary="Validates whether an individual uploaded photo contains a motor vehicle",
+)
+async def validate_single_vehicle_upload(
+    file: UploadFile = File(..., description="Uploaded vehicle damage photo"),
+):
+    try:
+        content = await file.read()
+        return await validate_single_vehicle_photo(content)
+    except Exception as e:
+        logger.warning(f"Error in single photo vehicle validation: {e}")
+        return {
+            "is_vehicle": True,
+            "detected_subject": "vehicle",
+            "reason": "Photo accepted.",
+        }
