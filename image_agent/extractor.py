@@ -178,7 +178,17 @@ def _run_custom_model_on_photo(
 # 2. Pure Google Gemini Fallback Layer (gemini-3.5-flash-lite)
 # ------------------------------------------------------------------------------
 
-_vision_semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_CALLS)
+def _get_gemini_endpoint_and_headers(model: str, api_key: str) -> Tuple[str, Dict[str, str]]:
+    """Constructs the correct URL and HTTP headers for Google Gemini API supporting both AIza keys and AQ. auth tokens."""
+    base_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+    if api_key.startswith("AQ.") or api_key.startswith("ya29."):
+        headers["Authorization"] = f"Bearer {api_key}"
+        return base_url, headers
+    return f"{base_url}?key={api_key}", headers
 
 
 async def _analyze_photo_with_gemini(
@@ -193,7 +203,7 @@ async def _analyze_photo_with_gemini(
         raise VisionAPIError(f"GEMINI_API_KEY not configured. Cannot analyze photo #{image_index+1}. Set GEMINI_API_KEY in .env.")
 
     model = settings.GEMINI_MODEL
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+    url, headers = _get_gemini_endpoint_and_headers(model, api_key)
 
     prompt = f"""
 You are an expert motor insurance vehicle damage assessor.
@@ -244,7 +254,7 @@ Guidelines:
         for attempt in range(settings.MAX_RETRIES + 1):
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
-                    res = await client.post(url, json=payload)
+                    res = await client.post(url, json=payload, headers=headers)
                     
                     if res.status_code == 429:
                         if attempt < settings.MAX_RETRIES:

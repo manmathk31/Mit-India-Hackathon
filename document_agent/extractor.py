@@ -249,6 +249,19 @@ def _parse_claim_form_locally(raw_text: str, overall_conf: float) -> Dict[str, A
 _llm_semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_LLM_CALLS)
 
 
+def _get_gemini_endpoint_and_headers(model: str, api_key: str) -> Tuple[str, Dict[str, str]]:
+    """Constructs the correct URL and HTTP headers for Google Gemini API supporting both AIza keys and AQ. auth tokens."""
+    base_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": api_key,
+    }
+    if api_key.startswith("AQ.") or api_key.startswith("ya29."):
+        headers["Authorization"] = f"Bearer {api_key}"
+        return base_url, headers
+    return f"{base_url}?key={api_key}", headers
+
+
 async def _run_selective_llm_disambiguation(
     image_bytes: bytes,
     document_type: str,
@@ -301,7 +314,7 @@ Return strictly valid JSON with this format:
             try:
                 if settings.VISION_PROVIDER == "gemini":
                     model = settings.GEMINI_MODEL
-                    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+                    url, headers = _get_gemini_endpoint_and_headers(model, api_key)
                     parts = [
                         {"text": disambiguate_prompt},
                         {"inline_data": {"mime_type": "image/jpeg", "data": b64_img}},
@@ -311,7 +324,7 @@ Return strictly valid JSON with this format:
                         "generationConfig": {"response_mime_type": "application/json", "temperature": 0.0},
                     }
                     async with httpx.AsyncClient(timeout=timeout) as client:
-                        res = await client.post(url, json=payload)
+                        res = await client.post(url, json=payload, headers=headers)
                         
                         # Handle Rate Limit (HTTP 429 / ResourceExhausted)
                         if res.status_code == 429:
@@ -435,7 +448,7 @@ Return strictly valid JSON matching this structure:
 """
     if settings.VISION_PROVIDER == "gemini":
         model = settings.GEMINI_MODEL
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+        url, headers = _get_gemini_endpoint_and_headers(model, api_key)
         parts = [
             {"text": prompt},
             {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(rc_bytes).decode("utf-8")}},
@@ -444,7 +457,7 @@ Return strictly valid JSON matching this structure:
         ]
         payload = {"contents": [{"parts": parts}], "generationConfig": {"response_mime_type": "application/json", "temperature": 0.0}}
         async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
-            res = await client.post(url, json=payload)
+            res = await client.post(url, json=payload, headers=headers)
             if res.status_code != 200:
                 logger.warning(f"Vision API returned HTTP {res.status_code}: {res.text}")
                 return {"rc": {}, "dl": {}, "claim_form": {}}
