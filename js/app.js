@@ -1723,15 +1723,38 @@ function clearPhoto(slot) {
   renderApp();
 }
 
-// Processing Pipeline with Live API Call
+// Helper to update the processing screen UI dynamically based on real backend events
+function updateProcessingUI(progressPercent, messageText, stageName) {
+  const progressEl = document.getElementById('processing-progress-bar');
+  const stageEl = document.getElementById('processing-stage-text');
+  if (progressEl) {
+    progressEl.style.width = `${Math.min(100, Math.max(5, progressPercent))}%`;
+  }
+  if (stageEl && messageText) {
+    stageEl.innerText = messageText;
+  }
+}
+
+// Processing Pipeline with Real Backend-Driven Event Streaming
 async function startAiProcessing() {
-  // Validate files
+  console.log("%c[ClaimPilot AI] Initiating Claim Adjudication Pipeline...", "color: #4f46e5; font-weight: bold; font-size: 13px;");
+
+  // 1. Validate files
   const rcFile = AppState.uploads.docs.rc?.file;
   const dlFile = AppState.uploads.docs.dl?.file;
   const formFile = AppState.uploads.docs.claimForm?.file;
   const realPhotos = Object.values(AppState.uploads.photos).map(p => p?.file).filter(Boolean);
 
+  console.log("[ClaimPilot AI] Uploaded documents:", {
+    rc: rcFile ? `${rcFile.name} (${(rcFile.size / 1024).toFixed(1)} KB)` : "MISSING",
+    dl: dlFile ? `${dlFile.name} (${(dlFile.size / 1024).toFixed(1)} KB)` : "MISSING",
+    claimForm: formFile ? `${formFile.name} (${(formFile.size / 1024).toFixed(1)} KB)` : "MISSING",
+    photosCount: realPhotos.length,
+    photos: realPhotos.map(p => `${p.name} (${(p.size / 1024).toFixed(1)} KB)`),
+  });
+
   if (!rcFile || !dlFile || !formFile || realPhotos.length === 0) {
+    console.warn("[ClaimPilot AI] Document validation failed: Missing required files.");
     showPipelineError(
       'Missing Required Documents',
       'Please upload all 3 required documents (RC, Driving Licence, Claim Form) and at least 1 vehicle damage photo before launching autonomous adjudication.',
@@ -1741,27 +1764,9 @@ async function startAiProcessing() {
   }
 
   navigateTo('claim-processing');
-  
-  const stages = [
-    { title: "Document Agent",             desc: "Running local OCR & Sarathi validation on RC, DL & Claim Form..." },
-    { title: "Damage Assessment Agent",    desc: "Isolating component boundaries & severity with YOLO + Gemini Vision..." },
-    { title: "Cost Engine",               desc: "Reconciling live OEM parts, depreciation & labour costs..." },
-    { title: "Fraud & Anomaly Suite",     desc: "Validating perceptual image hashes & plate cross-checks..." },
-    { title: "Deterministic Decision Engine", desc: "Evaluating IRDAI statutory criteria & settlement decision..." }
-  ];
+  updateProcessingUI(5, 'Submitting files to ClaimPilot Orchestrator...', 'init');
 
-  let current = 0;
-  // Stage timer: 8-second intervals to reflect real pipeline timing (~40s total)
-  const stageTimer = setInterval(() => {
-    current++;
-    const progressEl = document.getElementById('processing-progress-bar');
-    const stageEl = document.getElementById('processing-stage-text');
-    if (progressEl) progressEl.style.width = `${Math.min(90, 10 + (current / stages.length) * 80)}%`;
-    if (stageEl && stages[current]) stageEl.innerText = stages[current].desc;
-    if (current >= stages.length - 1) clearInterval(stageTimer); // Stop cycling at last stage
-  }, 8000); // 8s per stage matches typical Gemini + OCR pipeline
-
-  // AbortController: auto-abort after 3.5 minutes (210s) — prevents infinite browser hang
+  // AbortController: 210-second ceiling
   const abortController = new AbortController();
   const abortTimeout = setTimeout(() => abortController.abort(), 210000);
 
@@ -1786,20 +1791,88 @@ async function startAiProcessing() {
     };
     formData.append('policy_record', JSON.stringify(policyPayload));
 
+    console.log("[ClaimPilot AI] Outbound POST /claims/process with Accept: application/x-ndjson");
+
     const res = await fetch('/claims/process', {
       method: 'POST',
       body: formData,
+      headers: {
+        'Accept': 'application/x-ndjson, application/json'
+      },
       signal: abortController.signal,
     });
 
     clearTimeout(abortTimeout);
-    clearInterval(stageTimer);
 
-    if (res.ok) {
-      const liveClaim = await res.json();
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({ detail: "Pipeline error" }));
+      const errMsg = errData.detail || errData.error || `Server returned HTTP ${res.status}`;
+      console.error("[ClaimPilot AI] Backend returned error:", res.status, errData);
+      showPipelineError('Adjudication Pipeline Failed', errMsg, 'pipeline_error', JSON.stringify(errData, null, 2));
+      return;
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    let liveClaim = null;
+
+    if (contentType.includes('application/x-ndjson') && res.body) {
+      console.log("%c[ClaimPilot AI] Connected to Real-time Backend Event Stream", "color: #10b981; font-weight: bold;");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop(); // Retain trailing partial chunk
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line);
+            console.log(
+              `%c[Backend Event %c${event.progress}%] %c${event.stage}: %c${event.message}`,
+              "color: #6366f1; font-weight: bold;",
+              "color: #ec4899; font-weight: bold;",
+              "color: #0284c7; font-weight: bold;",
+              "color: #334155;"
+            );
+
+            if (event.stage === 'error') {
+              console.error("[ClaimPilot AI] Pipeline error event received from backend:", event);
+              showPipelineError(
+                `Adjudication Failed at ${event.failed_stage || 'Pipeline'}`,
+                event.message || 'An error occurred during multi-agent adjudication.',
+                event.error_code || 'pipeline_error',
+                JSON.stringify(event, null, 2)
+              );
+              return;
+            }
+
+            updateProcessingUI(event.progress, event.message, event.stage);
+
+            if (event.stage === 'complete' && event.result) {
+              liveClaim = event.result;
+            }
+          } catch (jsonErr) {
+            console.warn("[ClaimPilot AI] Non-JSON stream chunk received:", line);
+          }
+        }
+      }
+    } else {
+      // Direct JSON fallback
+      console.log("[ClaimPilot AI] Direct JSON response received.");
+      liveClaim = await res.json();
+    }
+
+    if (liveClaim) {
+      console.log("%c[ClaimPilot AI] Adjudication Complete!", "color: #10b981; font-weight: bold; font-size: 14px;", liveClaim);
       liveClaim.user_id = AppState.currentUser ? AppState.currentUser.id : null;
-      
-      // Add real uploaded photo previews to claim so thumbnails render in UI
+
+      // Add uploaded photo previews to claim so thumbnails render in UI
       if (!liveClaim.damage_assessment.photos || liveClaim.damage_assessment.photos.length === 0) {
         liveClaim.damage_assessment.photos = Object.entries(AppState.uploads.photos)
           .filter(([k, v]) => Boolean(v))
@@ -1810,24 +1883,22 @@ async function startAiProcessing() {
       showToast(`Claim ${liveClaim.claim_id} adjudicated and stored in database!`);
       navigateTo('claim-detail', liveClaim.claim_id);
     } else {
-      const errData = await res.json().catch(() => ({ detail: "Pipeline error" }));
-      const errMsg = errData.detail || errData.error || 'An unexpected server error occurred.';
-      showPipelineError('Adjudication Pipeline Failed', errMsg, 'pipeline_error');
+      console.error("[ClaimPilot AI] Stream finished without complete claim payload.");
+      showPipelineError('Adjudication Incomplete', 'The processing pipeline completed without returning claim details. Please check logs.', 'incomplete_response');
     }
+
   } catch (err) {
     clearTimeout(abortTimeout);
-    clearInterval(stageTimer);
-    console.error("Adjudication API error:", err);
+    console.error("[ClaimPilot AI] Fatal Exception during adjudication:", err);
 
-    // Distinguish timeout from network error for better user guidance
     const isTimeout = err.name === 'AbortError';
     showPipelineError(
       isTimeout ? 'Processing Timeout' : 'Connection Error',
       isTimeout
         ? 'The AI pipeline took longer than expected (>3.5 minutes). This usually happens when the Gemini API is slow or unavailable. Please retry in a moment.'
-        : `Could not reach the backend orchestrator. Please check your network and try again.`,
+        : `Could not reach the backend orchestrator: ${err.message}`,
       isTimeout ? 'timeout_error' : 'network_error',
-      err.message
+      err.stack || err.message
     );
   }
 }

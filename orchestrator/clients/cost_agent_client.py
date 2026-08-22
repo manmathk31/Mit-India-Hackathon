@@ -79,6 +79,7 @@ async def call_cost_agent(
     # 3. Build exact payload for CostEstimateRequest.java
     # CRITICAL: Never fabricate vehicle identity. If make/model/year are unknown,
     # we cannot produce a valid cost estimate — return insufficient_data instead.
+    cid = claim_id or "UNKNOWN"
     make = vehicle_meta.get("make", "UNKNOWN")
     model = vehicle_meta.get("model", "UNKNOWN")
     variant = vehicle_meta.get("variant", "UNKNOWN")
@@ -108,10 +109,11 @@ async def call_cost_agent(
     
     # If no parts are damaged, we return a 0 CostReconciliation early
     if not parts_input:
+        logger.info(f"[Cost Agent] No damaged parts detected for claim '{cid}'. Returning zero-cost reconciliation.")
         return CostReconciliation(
             status="success",
             vehicle=None,
-            partsCost={"beforeDepreciation": 0, "depreciationAmount": 0, "afterDepreciation": 0, "repairMaterialCost": 0, "paintingCost": 0, "totalPartsCost": 0},
+            partsCost={"replacementBeforeDepreciation": 0, "depreciationAmount": 0, "afterDepreciation": 0, "repairMaterialCost": 0, "paintingCost": 0, "totalPartsCost": 0},
             laborCost={"min": 0, "max": 0},
             combinedTotal={"min": 0, "max": 0},
             confidence={"overall": 1.0, "sourceAgreement": "High Agreement", "sourcesUsed": ["Vision Agent"]},
@@ -119,16 +121,26 @@ async def call_cost_agent(
             partBreakdown=[]
         )
 
-    logger.info(f"Calling Cost Agent at {url} for claim '{claim_id or 'UNKNOWN'}'")
+    logger.info(
+        f"[OUTBOUND -> Cost Agent] Calling {url} | Claim: '{cid}' | Vehicle: {make} {model} ({reg_year}) | "
+        f"Parts to estimate: {len(parts_input)}"
+    )
 
+    t0 = time.time()
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.post(url, json=payload)
+            duration_ms = int((time.time() - t0) * 1000)
 
             if response.status_code == 200:
                 data = response.json()
-                logger.info(f"Received live response from Spring Boot Cost Agent for claim '{claim_id}'")
-                
+                total_min = data.get("combinedTotal", {}).get("min", 0)
+                total_max = data.get("combinedTotal", {}).get("max", 0)
+                logger.info(
+                    f"[INBOUND <- Cost Agent] Success HTTP 200 in {duration_ms}ms | Claim: '{cid}' | "
+                    f"Estimate: ₹{total_min:,.0f} – ₹{total_max:,.0f} | Breakdown items: {len(data.get('partBreakdown', []))}"
+                )
+
                 # Parse the CostEstimateResponse shape
                 return CostReconciliation(
                     status="success",
@@ -141,9 +153,12 @@ async def call_cost_agent(
                     partBreakdown=data.get("partBreakdown", [])
                 )
 
-            logger.error(f"Cost Agent returned HTTP {response.status_code}: {response.text}")
+            logger.error(
+                f"[INBOUND <- Cost Agent] HTTP {response.status_code} in {duration_ms}ms | Claim: '{cid}': {response.text[:300]}"
+            )
     except Exception as e:
-        logger.error(f"Live Cost Agent call failed ({str(e)}). No fallback allowed.")
+        duration_ms = int((time.time() - t0) * 1000)
+        logger.exception(f"[Cost Agent] Error connecting to {url} after {duration_ms}ms for claim '{cid}': {e}")
 
     # Honest degraded state
     return CostReconciliation(status="unavailable")

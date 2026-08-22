@@ -27,7 +27,7 @@ def _build_dummy_cost(
     return CostReconciliation(
         status="success",
         partsCost=PartsCost(
-            replacementBeforeDepreciation=parts_cost,
+            beforeDepreciation=parts_cost,
             depreciationAmount=0.0,
             afterDepreciation=parts_cost,
             repairMaterialCost=0.0,

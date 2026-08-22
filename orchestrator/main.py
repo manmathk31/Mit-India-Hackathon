@@ -154,30 +154,20 @@ def _parse_policy_record(policy_record_raw: str, claim_id: Optional[str] = None)
 # CLAIMS ADJUDICATION PIPELINE & PERSISTENCE
 # ------------------------------------------------------------------------------
 
-@app.post(
-    "/claims/process",
-    response_model=ClaimProcessResponse,
-    status_code=status.HTTP_200_OK,
-    tags=["Claims"],
-    summary="End-to-end multi-agent claim adjudication pipeline with database persistence",
-)
-async def process_claim(
-    rc_image: UploadFile = File(..., description="Vehicle Registration Certificate image"),
-    dl_image: UploadFile = File(..., description="Driver Driving Licence image"),
-    claim_form_image: UploadFile = File(..., description="Claim Intimation Form image"),
-    damage_photos: List[UploadFile] = File(..., description="1 to 8 physical vehicle damage photos"),
-    policy_record: str = Form(..., description="Authoritative policy record JSON string"),
-    claim_id: Optional[str] = Form(None, description="Optional unique claim identifier"),
-    db: AsyncSession = Depends(get_db),
-):
+async def _run_claim_pipeline(
+    rc_bytes: bytes,
+    dl_bytes: bytes,
+    claim_form_bytes: bytes,
+    photo_buffers: List[Tuple[int, bytes]],
+    raw_photos_bytes: List[bytes],
+    policy_record: str,
+    claim_id: Optional[str],
+    db: AsyncSession,
+    yield_event: Optional[Any] = None,
+) -> ClaimProcessResponse:
     """
-    Core ClaimPilot AI Adjudication & DB Persistence Endpoint.
-    1. Concurrently calls Document Agent & Image Agent.
-    2. Calls Spring AI Cost Agent with extracted vehicle specs & damage matrix.
-    3. Runs comprehensive Fraud Verification scans.
-    4. Evaluates pure deterministic Decision Engine (Statutory IRDAI limit, Total Loss, Auto-Approval).
-    5. Saves full claim, detections, and audit trails to PostgreSQL / Supabase.
-    6. Returns unified response matching frontend contract.
+    Executes the multi-agent adjudication pipeline step-by-step.
+    If yield_event is provided, emits real progress events as each backend step finishes.
     """
     start_time = time.time()
     submission_dt = datetime.now()
@@ -186,75 +176,89 @@ async def process_claim(
     policy = _parse_policy_record(policy_record, claim_id=claim_id)
     tracking_claim_id = policy.claim_id or claim_id or f"CLM-{int(time.time())}"
 
-    logger.info(f"Received claim processing request for '{tracking_claim_id}'")
+    logger.info(
+        f"[PIPELINE START] Claim ID: '{tracking_claim_id}' | Policy: '{policy.policy_number}' | "
+        f"Holder: '{policy.owner_name}' | Photos: {len(photo_buffers)}"
+    )
 
-    # 2. Read incoming file buffers
+    if yield_event:
+        await yield_event("init", 10, "Validating uploaded documents & security tokens...")
+
+    # 2. Document Agent Execution
+    if yield_event:
+        await yield_event("documents_running", 25, "Document Agent: Parsing RC, DL & Claim Form via Multimodal Vision...")
+
+    t_doc = time.time()
     try:
-        rc_bytes = await rc_image.read()
-        dl_bytes = await dl_image.read()
-        claim_form_bytes = await claim_form_image.read()
-
-        photo_buffers = []
-        raw_photos_bytes = []
-        for idx, photo_file in enumerate(damage_photos):
-            p_bytes = await photo_file.read()
-            photo_buffers.append((idx, p_bytes))
-            raw_photos_bytes.append(p_bytes)
-
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Failed to read uploaded image bytes: {str(e)}",
-        )
-
-    # 3. Concurrent Execution of Document Agent & Image Agent
-    try:
-        doc_task = call_document_agent(
+        doc_result = await call_document_agent(
             rc_bytes=rc_bytes,
             dl_bytes=dl_bytes,
             claim_form_bytes=claim_form_bytes,
             policy_record=policy.model_dump(),
             claim_id=tracking_claim_id,
         )
-        img_task = call_image_agent(
+    except Exception as e:
+        logger.exception(f"[PIPELINE ERROR] Document Agent failed for claim '{tracking_claim_id}': {e}")
+        raise
+
+    doc_status = doc_result.get("overall_status", "unknown")
+    doc_ms = int((time.time() - t_doc) * 1000)
+    logger.info(f"[PIPELINE] Document Agent step completed in {doc_ms}ms (Status: {doc_status})")
+
+    if yield_event:
+        await yield_event(
+            "documents_done",
+            45,
+            f"Document Agent complete ({doc_status.capitalize()}). Plate: {doc_result.get('extracted_plate_number', 'N/A')}",
+            {"status": doc_status, "plate": doc_result.get("extracted_plate_number")}
+        )
+
+    # 3. Image Damage Assessment Execution
+    if yield_event:
+        await yield_event("damage_running", 55, "Damage Assessment Agent: Detecting part boundaries & severities...")
+
+    t_img = time.time()
+    try:
+        img_result = await call_image_agent(
             damage_photos=photo_buffers,
             claim_id=tracking_claim_id,
         )
-
-        doc_result, img_result = await asyncio.gather(doc_task, img_task)
-
     except Exception as e:
-        logger.error(f"Upstream agent execution failed for claim '{tracking_claim_id}': {str(e)}", exc_info=True)
-        return JSONResponse(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            content=ErrorDetail(
-                error="agent_orchestration_failed",
-                detail=f"Sub-agent service call failed: {str(e)}",
-                claim_id=tracking_claim_id,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            ).model_dump(),
+        logger.exception(f"[PIPELINE ERROR] Image Agent failed for claim '{tracking_claim_id}': {e}")
+        raise
+
+    detections = img_result.get("detections", [])
+    img_ms = int((time.time() - t_img) * 1000)
+    logger.info(f"[PIPELINE] Image Agent step completed in {img_ms}ms ({len(detections)} parts detected)")
+
+    if yield_event:
+        await yield_event(
+            "damage_done",
+            70,
+            f"Damage Assessment complete ({len(detections)} parts identified).",
+            {"detections_count": len(detections), "severity": img_result.get("overall_damage_status")}
         )
 
     # 4. Extract vehicle specs and damage items for Cost Agent
     extracted_vehicle_meta = doc_result.get("extracted_vehicle_meta", {})
-
-    detections = img_result.get("detections", [])
     damage_list_for_cost = []
     for d in detections:
-        # Use actual detection values — do NOT fabricate defaults for missing data.
-        # If a detection came from Gemini/YOLO, these fields should be present.
         part_name = d.get("part_name", "")
         if not part_name:
-            continue  # Skip empty detections
+            continue
         damage_list_for_cost.append({
             "part_name": part_name,
             "material_type": d.get("material_type", "unknown"),
-            "severity": d.get("severity", "minor"),  # Safe: this detection exists
+            "severity": d.get("severity", "minor"),
             "repair_or_replace": d.get("repair_or_replace", "repair"),
-            "confidence": d.get("confidence", 0.5),  # Honest low default for missing conf
+            "confidence": d.get("confidence", 0.5),
         })
 
     # 5. Call Cost Agent (Spring Boot)
+    if yield_event:
+        await yield_event("cost_running", 75, "Cost Engine: Calculating IRDAI depreciation & regional labour rates...")
+
+    t_cost = time.time()
     try:
         cost_result = await call_cost_agent(
             vehicle_meta=extracted_vehicle_meta,
@@ -265,12 +269,25 @@ async def process_claim(
             claim_id=tracking_claim_id,
         )
     except Exception as e:
-        logger.error(f"Cost agent failure for claim '{tracking_claim_id}': {str(e)}")
-        # Honest fallback if even the HTTP call wrapper fails unexpectedly
+        logger.exception(f"[PIPELINE ERROR] Cost Agent failed for claim '{tracking_claim_id}': {e}")
         from .schemas import CostReconciliation
         cost_result = CostReconciliation(status="unavailable")
 
-    # 6. Execute Fraud Checks Suite
+    cost_ms = int((time.time() - t_cost) * 1000)
+    logger.info(f"[PIPELINE] Cost Agent step completed in {cost_ms}ms (Status: {cost_result.status})")
+
+    if yield_event:
+        await yield_event(
+            "cost_done",
+            85,
+            f"Cost Reconciliation complete (Estimate: {cost_result.formatted_final}).",
+            {"status": cost_result.status, "estimate": cost_result.formatted_final}
+        )
+
+    # 6. Execute Fraud Checks Suite & Decision Engine
+    if yield_event:
+        await yield_event("fraud_decision_running", 90, "Running Anti-Spoofing, Deduplication & IRDAI Decision Engine...")
+
     extracted_plate = doc_result.get("extracted_plate_number", policy.rc_number)
     damage_desc_form = doc_result.get("extracted_damage_description_from_form", "")
 
@@ -283,7 +300,6 @@ async def process_claim(
         claim_id=tracking_claim_id,
     )
 
-    # 7. Evaluate Pure Deterministic Decision Engine
     policy_dict = {
         "number": policy.policy_number,
         "holder": policy.owner_name,
@@ -293,7 +309,6 @@ async def process_claim(
     }
 
     primary_location = "Front Bumper & Lower Grille" if any("bumper" in d.get("part_name", "") for d in detections) else "Body Structure"
-    # Use actual damage status from image agent — default to "none" (unknown), NOT "moderate"
     actual_damage_status = img_result.get("overall_damage_status", "none")
     formatted_damage_assessment = {
         "severity": actual_damage_status,
@@ -325,7 +340,7 @@ async def process_claim(
         base_time=submission_dt,
     )
 
-    # 8. Persist to PostgreSQL / Supabase Database
+    # 7. Persist to Database
     try:
         claim_row = Claim(
             claim_number=tracking_claim_id,
@@ -337,7 +352,7 @@ async def process_claim(
             overall_damage_severity=actual_damage_status,
             estimated_cost_low=cost_result.final_low,
             estimated_cost_high=cost_result.final_high,
-            recommended_payout=cost_result.final_low,  # Store low-end as the conservative payout float
+            recommended_payout=cost_result.final_low,
             document_check_json=doc_result,
             damage_assessment_json=formatted_damage_assessment,
             cost_estimate_json={
@@ -351,7 +366,6 @@ async def process_claim(
         db.add(claim_row)
         await db.flush()
 
-        # Add detected parts
         for d in detections:
             part_row = ClaimDetectedPart(
                 claim_id=claim_row.id,
@@ -364,7 +378,6 @@ async def process_claim(
             )
             db.add(part_row)
 
-        # Add fraud checks
         for fc in fraud_checks:
             fc_row = ClaimFraudCheck(
                 claim_id=claim_row.id,
@@ -374,7 +387,6 @@ async def process_claim(
             )
             db.add(fc_row)
 
-        # Add decision trails
         for dt in decision_trail:
             dt_row = ClaimDecisionTrail(
                 claim_id=claim_row.id,
@@ -387,18 +399,16 @@ async def process_claim(
             db.add(dt_row)
 
         await db.commit()
-        logger.info(f"Persisted claim '{tracking_claim_id}' successfully to database (UUID: {claim_row.id})")
+        logger.info(f"[DB PERSIST] Claim '{tracking_claim_id}' persisted successfully (UUID: {claim_row.id})")
 
     except Exception as e:
-        logger.warning(f"Database write exception for claim '{tracking_claim_id}': {str(e)}")
-        # Don't fail customer response if DB commit encountered a non-fatal constraint
+        logger.exception(f"[DB ERROR] Database write exception for claim '{tracking_claim_id}': {e}")
         await db.rollback()
 
-    # 9. Return Unified Response
     duration_ms = round((time.time() - start_time) * 1000, 2)
-    logger.info(f"Claim adjudication completed for '{tracking_claim_id}' in {duration_ms}ms")
+    logger.info(f"[PIPELINE COMPLETE] Claim '{tracking_claim_id}' adjudicated as '{decision_status}' in {duration_ms}ms")
 
-    return ClaimProcessResponse(
+    response_payload = ClaimProcessResponse(
         id=tracking_claim_id.lower().replace("-", "_"),
         claim_id=tracking_claim_id,
         submission_timestamp=submission_dt.strftime("%d %b %Y, %I:%M %p IST"),
@@ -409,7 +419,7 @@ async def process_claim(
             "make": extracted_vehicle_meta.get("make", "UNKNOWN"),
             "model": extracted_vehicle_meta.get("model", "UNKNOWN"),
             "variant": extracted_vehicle_meta.get("variant", "UNKNOWN"),
-            "year": extracted_vehicle_meta.get("registration_year"),  # None if not extracted
+            "year": extracted_vehicle_meta.get("registration_year"),
             "registration": policy.rc_number,
             "fuel": "UNKNOWN",
         },
@@ -426,6 +436,134 @@ async def process_claim(
         fraud_checks=fraud_checks,
         decision_trail=decision_trail,
     )
+
+    if yield_event:
+        await yield_event(
+            "complete",
+            100,
+            f"Adjudication complete. Decision: {status_label}",
+            response_payload.model_dump()
+        )
+
+    return response_payload
+
+
+@app.post(
+    "/claims/process",
+    status_code=status.HTTP_200_OK,
+    tags=["Claims"],
+    summary="End-to-end multi-agent claim adjudication pipeline (supports NDJSON streaming and direct JSON)",
+)
+async def process_claim(
+    request: Request,
+    rc_image: UploadFile = File(..., description="Vehicle Registration Certificate image"),
+    dl_image: UploadFile = File(..., description="Driver Driving Licence image"),
+    claim_form_image: UploadFile = File(..., description="Claim Intimation Form image"),
+    damage_photos: List[UploadFile] = File(..., description="1 to 8 physical vehicle damage photos"),
+    policy_record: str = Form(..., description="Authoritative policy record JSON string"),
+    claim_id: Optional[str] = Form(None, description="Optional unique claim identifier"),
+    db: AsyncSession = Depends(get_db),
+):
+    """
+    Unified Claim Processing Endpoint.
+    If client requests Accept: application/x-ndjson or ?stream=true, streams real-time stage completion events.
+    Otherwise returns direct JSON ClaimProcessResponse.
+    """
+    accept_header = request.headers.get("accept", "")
+    wants_stream = "application/x-ndjson" in accept_header or request.query_params.get("stream") == "true"
+
+    try:
+        rc_bytes = await rc_image.read()
+        dl_bytes = await dl_image.read()
+        claim_form_bytes = await claim_form_image.read()
+
+        photo_buffers = []
+        raw_photos_bytes = []
+        for idx, photo_file in enumerate(damage_photos):
+            p_bytes = await photo_file.read()
+            photo_buffers.append((idx, p_bytes))
+            raw_photos_bytes.append(p_bytes)
+
+    except Exception as e:
+        logger.exception(f"Failed to read uploaded image bytes: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Failed to read uploaded image bytes: {str(e)}",
+        )
+
+    if wants_stream:
+        async def event_stream():
+            queue = asyncio.Queue()
+
+            async def streamer_callback(stage: str, progress: int, message: str, data: Any = None):
+                event_dict = {"stage": stage, "progress": progress, "message": message}
+                if stage == "complete":
+                    event_dict["result"] = data
+                elif data is not None:
+                    event_dict["data"] = data
+                await queue.put(json.dumps(event_dict) + "\n")
+
+            async def pipeline_worker():
+                try:
+                    await _run_claim_pipeline(
+                        rc_bytes=rc_bytes,
+                        dl_bytes=dl_bytes,
+                        claim_form_bytes=claim_form_bytes,
+                        photo_buffers=photo_buffers,
+                        raw_photos_bytes=raw_photos_bytes,
+                        policy_record=policy_record,
+                        claim_id=claim_id,
+                        db=db,
+                        yield_event=streamer_callback,
+                    )
+                except Exception as ex:
+                    logger.exception(f"Streaming pipeline worker encountered error: {ex}")
+                    err_event = {
+                        "stage": "error",
+                        "progress": 0,
+                        "message": f"Pipeline execution failed: {str(ex)}",
+                        "error_code": "pipeline_error",
+                    }
+                    await queue.put(json.dumps(err_event) + "\n")
+                finally:
+                    await queue.put(None)  # Sentinel to close stream
+
+            worker_task = asyncio.create_task(pipeline_worker())
+
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield item
+
+            await worker_task
+
+        return StreamingResponse(event_stream(), media_type="application/x-ndjson")
+
+    # Non-streaming direct execution
+    try:
+        return await _run_claim_pipeline(
+            rc_bytes=rc_bytes,
+            dl_bytes=dl_bytes,
+            claim_form_bytes=claim_form_bytes,
+            photo_buffers=photo_buffers,
+            raw_photos_bytes=raw_photos_bytes,
+            policy_record=policy_record,
+            claim_id=claim_id,
+            db=db,
+            yield_event=None,
+        )
+    except Exception as e:
+        logger.exception(f"Direct claim pipeline execution failed: {e}")
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content=ErrorDetail(
+                error="agent_orchestration_failed",
+                detail=f"Sub-agent service call failed: {str(e)}",
+                claim_id=claim_id or "UNKNOWN",
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ).model_dump(),
+        )
 
 
 # ------------------------------------------------------------------------------

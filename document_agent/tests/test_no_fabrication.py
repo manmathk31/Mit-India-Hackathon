@@ -32,11 +32,12 @@ async def test_disambiguation_missing_key_does_not_inflate_confidence(monkeypatc
     monkeypatch.setattr(settings, "GEMINI_API_KEY", "")
     
     res = await _run_selective_llm_disambiguation(
+        image_bytes=b"",
+        document_type="RC",
         field_name="owner_name",
         initial_extracted_value="RAJESH K",
         initial_confidence=0.40,
         context_hint="Rajesh Kumar Sharma",
-        b64_img="",
     )
     
     assert res["confidence"] <= 0.40, f"Confidence inflated unexpectedly: {res['confidence']}"

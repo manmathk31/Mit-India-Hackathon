@@ -2,7 +2,7 @@ import pytest
 import io
 from PIL import Image
 
-from orchestrator.clients.cost_agent_client import estimate_claim_cost
+from orchestrator.clients.cost_agent_client import call_cost_agent
 from orchestrator.fraud_checks import (
     duplicate_check,
     live_camera_anti_spoofing_check,
@@ -16,11 +16,13 @@ async def test_cost_client_guards_against_unknown_vehicle_meta():
     """Cost client must NOT fabricate Maruti/Swift/2021 when vehicle_meta is unknown."""
     unknown_meta = {"make": "UNKNOWN", "model": "UNKNOWN", "registration_year": None}
     
-    res = await estimate_claim_cost(
+    res = await call_cost_agent(
         vehicle_meta=unknown_meta,
-        detections=[{"part_name": "front bumper", "material_type": "plastic-rubber", "severity": "minor", "repair_or_replace": "repair"}],
-        damage_location="front",
+        damage_list=[{"part_name": "front bumper", "material_type": "plastic-rubber", "severity": "minor", "repair_or_replace": "repair", "confidence": 0.9}],
+        document_confidence=0.9,
         region="Mumbai",
+        idv=500000.0,
+        claim_id="CLM-TEST-001",
     )
     
     assert res.status == "insufficient_data"
