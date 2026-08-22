@@ -364,10 +364,13 @@ Return strictly valid JSON with this format:
                             return json.loads(re.sub(r"^```json\s*|\s*```$", "", text.strip()))
 
             except httpx.TimeoutException:
-                if attempt < settings.MAX_RETRIES:
+                # For timeouts (not rate limits), only retry once to prevent burning
+                # excessive time on unrelated/stock images that Gemini can't process.
+                if attempt < 1:
                     await asyncio.sleep(1.0)
                     continue
                 logger.warning(f"Selective LLM timeout for '{field_name}'. Gracefully falling back.")
+                break
             except Exception as e:
                 logger.warning(f"Selective LLM error for '{field_name}': {str(e)}. Gracefully falling back.")
                 break
@@ -524,6 +527,21 @@ async def extract_documents(
             dl_data = extracted_dict.get("dl", {}) or {}
             form_data = extracted_dict.get("claim_form", {}) or {}
             fallback_count += 1
+
+            # Fast-fail: If all 3 documents returned empty from Vision API, this is likely
+            # a completely unrelated/stock image set. Skip expensive LLM disambiguation.
+            all_empty = not any([rc_data, dl_data, form_data])
+            if all_empty:
+                logger.warning(
+                    "Vision API returned empty for all 3 documents. "
+                    "Likely unrelated/stock images uploaded. Skipping LLM disambiguation to prevent timeout."
+                )
+                return RawExtractedDocuments(
+                    rc=ExtractedRCDocument(),
+                    dl=ExtractedDLDocument(),
+                    claim_form=ExtractedClaimFormDocument(),
+                    fallback_invocations_count=fallback_count,
+                )
         else:
             rc_data = _parse_rc_locally(rc_text, rc_conf)
             dl_data = _parse_dl_locally(dl_text, dl_conf)

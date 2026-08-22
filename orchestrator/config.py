@@ -37,8 +37,11 @@ class Settings(BaseSettings):
     IRDAI_MAX_AUTO_APPROVAL_LIMIT: float = 50000.0  # Mandatory ₹50,000 threshold for physical surveyor inspection
 
     # Timeouts and Client Resilience
-    HTTP_TIMEOUT_SECONDS: float = 60.0
-    CLIENT_RETRIES: int = 2
+    # NOTE: Set to 120s because the Document Agent may take up to ~40s for legitimate
+    # documents (local OCR + selective LLM disambiguation). Stock/unrelated images
+    # now fast-fail in the agents themselves, so this ceiling is rarely hit.
+    HTTP_TIMEOUT_SECONDS: float = 120.0
+    CLIENT_RETRIES: int = 1  # Reduced from 2: retrying a timed-out doc is rarely useful
 
     model_config = SettingsConfigDict(
         env_file=[".env", "orchestrator/.env"],

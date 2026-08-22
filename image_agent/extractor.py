@@ -325,21 +325,34 @@ async def extract_damage_assessment(
     all_detections: List[DamageDetection] = []
     logger.info(f"Analyzing {len(photos)} photos (Custom Model + Gemini Vision)")
 
+    # Step A: Run custom model on all photos first (synchronous, fast)
+    gemini_fallback_tasks = []
     for idx, photo_bytes in photos:
         w, h = dimensions[idx]
-        
-        # Step A: Try Custom Model (Primary)
         custom_dets = _run_custom_model_on_photo(photo_bytes, idx, w, h)
         if custom_dets is not None and len(custom_dets) > 0:
             logger.info(f"Photo #{idx+1} successfully analyzed via Custom Model ({len(custom_dets)} detections)")
             all_detections.extend(custom_dets)
         else:
-            logger.info(f"Photo #{idx+1} analyzed via Custom Model - No damage detected or model unavailable. Falling back to Gemini Vision API.")
+            logger.info(f"Photo #{idx+1}: Custom Model unavailable/no detections. Queuing Gemini Vision API fallback.")
+            gemini_fallback_tasks.append((idx, photo_bytes, w, h))
+
+    # Step B: Run ALL Gemini fallback calls in PARALLEL (not sequentially)
+    # This reduces latency from N*25s to just 25s regardless of photo count.
+    if gemini_fallback_tasks:
+        logger.info(f"Running {len(gemini_fallback_tasks)} Gemini Vision calls in parallel")
+        async def _safe_gemini(idx: int, photo_bytes: bytes, w: int, h: int) -> List[DamageDetection]:
             try:
-                gemini_dets = await _analyze_photo_with_gemini(photo_bytes, idx, w, h)
-                all_detections.extend(gemini_dets)
+                return await _analyze_photo_with_gemini(photo_bytes, idx, w, h)
             except Exception as e:
                 logger.warning(f"Gemini Fallback failed for photo #{idx+1}: {str(e)}")
+                return []
+
+        parallel_results = await asyncio.gather(
+            *[_safe_gemini(idx, pb, w, h) for idx, pb, w, h in gemini_fallback_tasks]
+        )
+        for dets in parallel_results:
+            all_detections.extend(dets)
     # 4. Compute overall damage status
     severities = [d.severity for d in all_detections]
     overall_status = calculate_overall_status(severities)
