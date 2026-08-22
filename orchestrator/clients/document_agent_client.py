@@ -23,7 +23,8 @@ async def call_document_agent(
     Sends multipart/form-data payload with image bytes and JSON policy record.
     """
     url = f"{settings.DOCUMENT_AGENT_URL.rstrip('/')}/documents/verify"
-    timeout = settings.HTTP_TIMEOUT_SECONDS
+    timeout = getattr(settings, "DOCUMENT_AGENT_TIMEOUT_SECONDS", 45.0)
+    retries = getattr(settings, "CLIENT_RETRIES", 0)
 
     files = [
         ("rc_image", ("rc_document.jpg", rc_bytes, "image/jpeg")),
@@ -36,9 +37,9 @@ async def call_document_agent(
         "claim_id": claim_id or policy_record.get("claim_id", "UNKNOWN"),
     }
 
-    logger.info(f"Calling Document Agent at {url} for claim '{data['claim_id']}'")
+    logger.info(f"Calling Document Agent at {url} (timeout={timeout}s) for claim '{data['claim_id']}'")
 
-    for attempt in range(settings.CLIENT_RETRIES + 1):
+    for attempt in range(retries + 1):
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(url, files=files, data=data)
@@ -52,14 +53,16 @@ async def call_document_agent(
                 )
                 if response.status_code == 422:
                     raise DocumentAgentClientError(f"Document Agent validation error (422): {error_body}")
+                if attempt == retries:
+                    raise DocumentAgentClientError(f"Document Agent returned HTTP {response.status_code}: {error_body}")
 
         except httpx.TimeoutException as e:
-            logger.warning(f"Document Agent call timed out after {timeout}s (Attempt {attempt+1})")
-            if attempt == settings.CLIENT_RETRIES:
+            logger.warning(f"Document Agent call timed out after {timeout}s (Attempt {attempt+1}/{retries+1})")
+            if attempt == retries:
                 raise DocumentAgentClientError(f"Document Agent timed out after {timeout}s: {str(e)}")
         except httpx.RequestError as e:
             logger.warning(f"Network error connecting to Document Agent: {str(e)}")
-            if attempt == settings.CLIENT_RETRIES:
+            if attempt == retries:
                 raise DocumentAgentClientError(f"Could not connect to Document Agent at {url}: {str(e)}")
 
-    raise DocumentAgentClientError(f"Document Agent call failed after {settings.CLIENT_RETRIES+1} attempts.")
+    raise DocumentAgentClientError(f"Document Agent call failed after {retries+1} attempts.")

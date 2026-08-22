@@ -1802,8 +1802,16 @@ async function startAiProcessing() {
       navigateTo('claim-detail', liveClaim.claim_id);
     } else {
       const errData = await res.json().catch(() => ({ detail: "Pipeline error" }));
-      const errMsg = errData.detail || errData.error || 'An unexpected server error occurred.';
-      showPipelineError('Adjudication Pipeline Failed', errMsg, 'pipeline_error');
+      const stage = errData.stage || 'orchestration';
+      const stageTitles = {
+        'image_agent': 'Damage Assessment Agent Failed',
+        'document_agent': 'Document Verification Agent Failed',
+        'cost_agent': 'Cost Engine Service Failed',
+        'orchestration': 'Adjudication Pipeline Failed'
+      };
+      const title = stageTitles[stage] || 'Adjudication Pipeline Failed';
+      const errMsg = errData.detail || errData.error || 'An unexpected server error occurred during claim processing.';
+      showPipelineError(title, errMsg, stage, JSON.stringify(errData, null, 2));
     }
   } catch (err) {
     clearTimeout(abortTimeout);
@@ -1815,8 +1823,8 @@ async function startAiProcessing() {
     showPipelineError(
       isTimeout ? 'Processing Timeout' : 'Connection Error',
       isTimeout
-        ? 'The AI pipeline took longer than expected (>3.5 minutes). This usually happens when the Gemini API is slow or unavailable. Please retry in a moment.'
-        : `Could not reach the backend orchestrator. Please check your network and try again.`,
+        ? 'The claim adjudication pipeline exceeded the 3.5-minute client timeout. Please verify that backend microservices are operational and try again.'
+        : `Could not connect to the ClaimPilot backend orchestrator. Please check your network or service status.`,
       isTimeout ? 'timeout_error' : 'network_error',
       err.message
     );
@@ -1852,8 +1860,11 @@ function showPipelineError(title, message, errorCode = 'unknown', technicalDetai
 
   const isNetwork = errorCode === 'network_error';
   const isValidation = errorCode === 'validation_error';
+  const isTimeout = errorCode === 'timeout_error';
+  const isImageAgent = errorCode === 'image_agent';
+  const isDocAgent = errorCode === 'document_agent';
 
-  const iconName = isValidation ? 'circle-alert' : (isNetwork ? 'wifi-off' : 'shield-x');
+  const iconName = isValidation ? 'circle-alert' : (isNetwork ? 'wifi-off' : (isTimeout ? 'clock-alert' : 'shield-x'));
   const iconBg = isValidation ? 'bg-amber-100' : 'bg-rose-100';
   const iconColor = isValidation ? 'text-amber-600' : 'text-rose-600';
   const accentColor = isValidation ? 'border-amber-200' : 'border-rose-200';
@@ -1861,11 +1872,23 @@ function showPipelineError(title, message, errorCode = 'unknown', technicalDetai
     ? 'bg-amber-50 text-amber-800 border border-amber-200'
     : 'bg-rose-50 text-rose-800 border border-rose-200';
 
-  const tips = isValidation
-    ? ['Ensure RC, Driving Licence, and Claim Form images are uploaded.', 'At least 1 damage photo is required.', 'Supported formats: JPG, PNG, WebP.']
-    : isNetwork
-    ? ['Check your internet connection.', 'The backend service may be restarting — wait 30 seconds and try again.', 'Contact support if this persists.']
-    : ['Uploaded images may be unrelated to vehicle documents.', 'Try uploading clearer, higher-resolution photos.', 'Ensure documents are actual RC / DL / Claim Form images.'];
+  let tips = [
+    'Uploaded images may be corrupted or unreadable.',
+    'Try uploading clearer, higher-resolution photos.',
+    'Check that all backend microservices are running.'
+  ];
+
+  if (isValidation) {
+    tips = ['Ensure RC, Driving Licence, and Claim Form images are uploaded.', 'At least 1 damage photo is required.', 'Supported formats: JPG, PNG, WebP.'];
+  } else if (isNetwork) {
+    tips = ['Check your internet connection.', 'The backend orchestrator service may be restarting — wait 30 seconds and try again.', 'Ensure the backend server is reachable.'];
+  } else if (isTimeout) {
+    tips = ['Verify that the image agent and document agent background processes are alive.', 'Check service deploy logs for unhandled errors.', 'Try submitting with 1-2 focused damage photos.'];
+  } else if (isImageAgent) {
+    tips = ['Verify vehicle damage photos are standard JPG/PNG images under 10MB.', 'Ensure the Image Agent on port 8002 is running and reachable.', 'Check GEMINI_API_KEY environment variable.'];
+  } else if (isDocAgent) {
+    tips = ['Ensure RC, Driving Licence, and Claim Form photos are legible.', 'Ensure the Document Agent on port 8001 is running.', 'Avoid heavily blurred or cropped documents.'];
+  }
 
   modal.className = 'fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-4';
   modal.innerHTML = `

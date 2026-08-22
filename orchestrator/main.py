@@ -182,28 +182,60 @@ async def process_claim(
         )
 
     # 3. Concurrent Execution of Document Agent & Image Agent
-    try:
-        doc_task = call_document_agent(
-            rc_bytes=rc_bytes,
-            dl_bytes=dl_bytes,
-            claim_form_bytes=claim_form_bytes,
-            policy_record=policy.model_dump(),
-            claim_id=tracking_claim_id,
-        )
-        img_task = call_image_agent(
-            damage_photos=photo_buffers,
-            claim_id=tracking_claim_id,
-        )
+    doc_task = call_document_agent(
+        rc_bytes=rc_bytes,
+        dl_bytes=dl_bytes,
+        claim_form_bytes=claim_form_bytes,
+        policy_record=policy.model_dump(),
+        claim_id=tracking_claim_id,
+    )
+    img_task = call_image_agent(
+        damage_photos=photo_buffers,
+        claim_id=tracking_claim_id,
+    )
 
-        doc_result, img_result = await asyncio.gather(doc_task, img_task)
+    results = await asyncio.gather(doc_task, img_task, return_exceptions=True)
+    doc_result, img_result = results[0], results[1]
 
-    except Exception as e:
-        logger.error(f"Upstream agent execution failed for claim '{tracking_claim_id}': {str(e)}", exc_info=True)
+    # If image agent failed initially, retry once with a fresh short timeout (30s)
+    if isinstance(img_result, Exception):
+        logger.warning(
+            f"Image agent initial call failed for claim '{tracking_claim_id}': {str(img_result)}. "
+            f"Retrying once with fresh 30s timeout..."
+        )
+        try:
+            img_result = await call_image_agent(
+                damage_photos=photo_buffers,
+                claim_id=tracking_claim_id,
+                timeout_seconds=30.0,
+            )
+            logger.info(f"Image agent retry succeeded for claim '{tracking_claim_id}'")
+        except Exception as retry_err:
+            logger.error(f"Image agent retry also failed for claim '{tracking_claim_id}': {str(retry_err)}")
+            img_result = retry_err
+
+    # Handle agent failures independently with precise stage labeling
+    if isinstance(doc_result, Exception):
+        logger.error(f"Document Agent failed for claim '{tracking_claim_id}': {str(doc_result)}")
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content=ErrorDetail(
-                error="agent_orchestration_failed",
-                detail=f"Sub-agent service call failed: {str(e)}",
+                error="document_agent_failed",
+                stage="document_agent",
+                detail=f"Document verification agent failed: {str(doc_result)}",
+                claim_id=tracking_claim_id,
+                timestamp=datetime.now(timezone.utc).isoformat(),
+            ).model_dump(),
+        )
+
+    if isinstance(img_result, Exception):
+        logger.error(f"Image Agent failed for claim '{tracking_claim_id}': {str(img_result)}")
+        return JSONResponse(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            content=ErrorDetail(
+                error="image_agent_failed",
+                stage="image_agent",
+                detail=f"Damage assessment image agent failed: {str(img_result)}",
                 claim_id=tracking_claim_id,
                 timestamp=datetime.now(timezone.utc).isoformat(),
             ).model_dump(),

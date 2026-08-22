@@ -13,13 +13,16 @@ class ImageAgentClientError(Exception):
 async def call_image_agent(
     damage_photos: List[Tuple[int, bytes]],
     claim_id: Optional[str] = None,
+    timeout_seconds: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
     Calls the live Image/Damage Assessment Agent at IMAGE_AGENT_URL/images/analyze.
     Sends multipart/form-data with 1 to N damage photos.
+    Default timeout: 45s (well below frontend 210s ceiling).
     """
     url = f"{settings.IMAGE_AGENT_URL.rstrip('/')}/images/analyze"
-    timeout = settings.HTTP_TIMEOUT_SECONDS
+    timeout = timeout_seconds or getattr(settings, "IMAGE_AGENT_TIMEOUT_SECONDS", 45.0)
+    retries = getattr(settings, "CLIENT_RETRIES", 0)
 
     files = [
         ("damage_photos", (f"damage_photo_{idx+1}.jpg", photo_bytes, "image/jpeg"))
@@ -30,9 +33,9 @@ async def call_image_agent(
         "claim_id": claim_id or "UNKNOWN",
     }
 
-    logger.info(f"Calling Image Agent at {url} with {len(files)} photos for claim '{data['claim_id']}'")
+    logger.info(f"Calling Image Agent at {url} (timeout={timeout}s) with {len(files)} photos for claim '{data['claim_id']}'")
 
-    for attempt in range(settings.CLIENT_RETRIES + 1):
+    for attempt in range(retries + 1):
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.post(url, files=files, data=data)
@@ -46,14 +49,16 @@ async def call_image_agent(
                 )
                 if response.status_code == 422:
                     raise ImageAgentClientError(f"Image Agent validation error (422): {error_body}")
+                if attempt == retries:
+                    raise ImageAgentClientError(f"Image Agent returned HTTP {response.status_code}: {error_body}")
 
         except httpx.TimeoutException as e:
-            logger.warning(f"Image Agent call timed out after {timeout}s (Attempt {attempt+1})")
-            if attempt == settings.CLIENT_RETRIES:
+            logger.warning(f"Image Agent call timed out after {timeout}s (Attempt {attempt+1}/{retries+1})")
+            if attempt == retries:
                 raise ImageAgentClientError(f"Image Agent timed out after {timeout}s: {str(e)}")
         except httpx.RequestError as e:
             logger.warning(f"Network error connecting to Image Agent: {str(e)}")
-            if attempt == settings.CLIENT_RETRIES:
+            if attempt == retries:
                 raise ImageAgentClientError(f"Could not connect to Image Agent at {url}: {str(e)}")
 
-    raise ImageAgentClientError(f"Image Agent call failed after {settings.CLIENT_RETRIES+1} attempts.")
+    raise ImageAgentClientError(f"Image Agent call failed after {retries+1} attempts.")

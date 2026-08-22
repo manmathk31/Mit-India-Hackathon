@@ -149,5 +149,6 @@ class ClaimProcessResponse(BaseModel):
 class ErrorDetail(BaseModel):
     error: str
     detail: str
+    stage: Optional[str] = None  # e.g. 'document_agent', 'image_agent', 'cost_agent', 'orchestration'
     claim_id: Optional[str] = None
     timestamp: str

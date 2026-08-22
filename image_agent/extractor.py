@@ -347,16 +347,20 @@ async def extract_damage_assessment(
             logger.info(f"Photo #{idx+1}: Custom Model unavailable/no detections. Queuing Gemini Vision API fallback.")
             gemini_fallback_tasks.append((idx, photo_bytes, w, h))
 
-    # Step B: Run ALL Gemini fallback calls in PARALLEL (not sequentially)
-    # This reduces latency from N*25s to just 25s regardless of photo count.
+    # Step B: Run ALL Gemini fallback calls in PARALLEL (with semaphore limit)
+    # This reduces latency from N*25s to just 25s while protecting the 15 RPM ceiling.
     if gemini_fallback_tasks:
-        logger.info(f"Running {len(gemini_fallback_tasks)} Gemini Vision calls in parallel")
+        logger.info(f"Running {len(gemini_fallback_tasks)} Gemini Vision fallback calls in parallel (concurrency limit={settings.MAX_CONCURRENT_CALLS})")
         async def _safe_gemini(idx: int, photo_bytes: bytes, w: int, h: int) -> List[DamageDetection]:
-            try:
-                return await _analyze_photo_with_gemini(photo_bytes, idx, w, h)
-            except Exception as e:
-                logger.warning(f"Gemini Fallback failed for photo #{idx+1}: {str(e)}")
-                return []
+            logger.info(f"Photo #{idx+1}: Invoking Gemini Vision fallback ({w}x{h}px)...")
+            async with _vision_semaphore:
+                try:
+                    dets = await _analyze_photo_with_gemini(photo_bytes, idx, w, h)
+                    logger.info(f"Photo #{idx+1}: Gemini Vision fallback completed with {len(dets)} detections")
+                    return dets
+                except Exception as e:
+                    logger.warning(f"Photo #{idx+1}: Gemini Vision fallback failed: {str(e)}")
+                    return []
 
         parallel_results = await asyncio.gather(
             *[_safe_gemini(idx, pb, w, h) for idx, pb, w, h in gemini_fallback_tasks]
