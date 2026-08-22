@@ -413,7 +413,7 @@ async def validate_single_vehicle_photo(
         }
 
     # Downscale for fast inference
-    img_copy = img.copy()
+    img_copy = img.convert("RGB")
     img_copy.thumbnail((800, 800), Image.Resampling.LANCZOS)
     buf = io.BytesIO()
     img_copy.save(buf, format="JPEG", quality=85)

@@ -395,7 +395,7 @@ async def _run_claim_pipeline(
                 outcome=dt.outcome,
                 detail=dt.detail,
                 status=dt.status,
-                timestamp=dt.timestamp,
+                timestamp=datetime.now(timezone.utc),
             )
             db.add(dt_row)
 
