@@ -1639,7 +1639,11 @@ async function startAiProcessing() {
   const realPhotos = Object.values(AppState.uploads.photos).map(p => p?.file).filter(Boolean);
 
   if (!rcFile || !dlFile || !formFile || realPhotos.length === 0) {
-    alert("Please upload all 3 required documents (RC, Driving Licence, Claim Form) and at least 1 vehicle damage photo before launching autonomous adjudication.");
+    showPipelineError(
+      'Missing Required Documents',
+      'Please upload all 3 required documents (RC, Driving Licence, Claim Form) and at least 1 vehicle damage photo before launching autonomous adjudication.',
+      'validation_error'
+    );
     return;
   }
 
@@ -1706,16 +1710,18 @@ async function startAiProcessing() {
       navigateTo('claim-detail', liveClaim.claim_id);
     } else {
       const errData = await res.json().catch(() => ({ detail: "Pipeline error" }));
-      alert(`Adjudication Pipeline Failed: ${errData.detail || errData.error || 'Server error'}`);
-      navigateTo('claim-submission');
-      goToStep(3);
+      const errMsg = errData.detail || errData.error || 'An unexpected server error occurred.';
+      showPipelineError('Adjudication Pipeline Failed', errMsg, 'pipeline_error');
     }
   } catch (err) {
     clearInterval(stageTimer);
     console.error("Adjudication API error:", err);
-    alert(`Failed to connect to backend orchestrator: ${err.message}. Ensure uvicorn is running on port 8000.`);
-    navigateTo('claim-submission');
-    goToStep(3);
+    showPipelineError(
+      'Connection Error',
+      `Could not reach the backend orchestrator. Please check your network and try again.`,
+      'network_error',
+      err.message
+    );
   }
 }
 
@@ -1736,6 +1742,96 @@ function renderProcessingScreen(container) {
       </div>
     </div>
   `;
+}
+
+// ------------------------------------------------------------------------------
+// 8b. PIPELINE ERROR MODAL (replaces raw browser alert())
+// ------------------------------------------------------------------------------
+
+function showPipelineError(title, message, errorCode = 'unknown', technicalDetail = '') {
+  const modal = document.getElementById('app-modal');
+  if (!modal) return;
+
+  const isNetwork = errorCode === 'network_error';
+  const isValidation = errorCode === 'validation_error';
+
+  const iconName = isValidation ? 'circle-alert' : (isNetwork ? 'wifi-off' : 'shield-x');
+  const iconBg = isValidation ? 'bg-amber-100' : 'bg-rose-100';
+  const iconColor = isValidation ? 'text-amber-600' : 'text-rose-600';
+  const accentColor = isValidation ? 'border-amber-200' : 'border-rose-200';
+  const tagColor = isValidation
+    ? 'bg-amber-50 text-amber-800 border border-amber-200'
+    : 'bg-rose-50 text-rose-800 border border-rose-200';
+
+  const tips = isValidation
+    ? ['Ensure RC, Driving Licence, and Claim Form images are uploaded.', 'At least 1 damage photo is required.', 'Supported formats: JPG, PNG, WebP.']
+    : isNetwork
+    ? ['Check your internet connection.', 'The backend service may be restarting — wait 30 seconds and try again.', 'Contact support if this persists.']
+    : ['Uploaded images may be unrelated to vehicle documents.', 'Try uploading clearer, higher-resolution photos.', 'Ensure documents are actual RC / DL / Claim Form images.'];
+
+  modal.className = 'fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-4';
+  modal.innerHTML = `
+    <div class="bg-white rounded-3xl max-w-lg w-full shadow-2xl border ${accentColor} overflow-hidden animate-fade-in-up">
+
+      <!-- Red/Amber Header Strip -->
+      <div class="p-6 pb-4 border-b border-slate-100">
+        <div class="flex items-start gap-4">
+          <div class="w-14 h-14 rounded-2xl ${iconBg} ${iconColor} flex items-center justify-center shrink-0 shadow-inner">
+            <i data-lucide="${iconName}" class="w-7 h-7"></i>
+          </div>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center gap-2 mb-1">
+              <span class="text-[10px] font-bold uppercase tracking-widest px-2 py-0.5 rounded-full ${tagColor}">
+                ${errorCode.replace(/_/g, ' ')}
+              </span>
+            </div>
+            <h2 class="text-lg font-extrabold text-slate-900 font-display leading-tight">${title}</h2>
+          </div>
+        </div>
+      </div>
+
+      <!-- Body -->
+      <div class="p-6 space-y-4">
+        <p class="text-sm text-slate-600 leading-relaxed">${message}</p>
+
+        <!-- Helpful tips -->
+        <div class="rounded-2xl bg-slate-50 border border-slate-200 p-4 space-y-2">
+          <p class="text-[11px] font-bold text-slate-500 uppercase tracking-wider">What to check</p>
+          ${tips.map(t => `
+            <div class="flex items-start gap-2">
+              <i data-lucide="chevron-right" class="w-3.5 h-3.5 text-indigo-500 mt-0.5 shrink-0"></i>
+              <span class="text-xs text-slate-600">${t}</span>
+            </div>
+          `).join('')}
+        </div>
+
+        ${technicalDetail ? `
+          <details class="rounded-xl border border-slate-200 overflow-hidden">
+            <summary class="px-4 py-2 text-[11px] font-bold text-slate-500 cursor-pointer hover:bg-slate-50 uppercase tracking-wider">Technical Detail</summary>
+            <div class="px-4 py-3 bg-slate-950 font-mono text-[11px] text-rose-300 break-all">${technicalDetail}</div>
+          </details>
+        ` : ''}
+      </div>
+
+      <!-- Footer Actions -->
+      <div class="px-6 pb-6 flex items-center gap-3">
+        <button
+          onclick="closeModal(); navigateTo('claim-submission'); goToStep(3);"
+          class="flex-1 py-3 px-4 rounded-xl bg-indigo-900 hover:bg-indigo-950 text-white text-sm font-bold flex items-center justify-center gap-2 transition-all shadow-md"
+        >
+          <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+          <span>Try Again</span>
+        </button>
+        <button
+          onclick="closeModal();"
+          class="py-3 px-5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-sm font-bold transition-all"
+        >
+          Dismiss
+        </button>
+      </div>
+    </div>
+  `;
+  setTimeout(() => lucide.createIcons(), 20);
 }
 
 // ------------------------------------------------------------------------------
