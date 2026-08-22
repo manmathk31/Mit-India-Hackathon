@@ -196,61 +196,64 @@ def _get_gemini_endpoint_and_headers(model: str, api_key: str) -> Tuple[str, Dic
     return f"{base_url}?key={api_key}", headers
 
 
-async def _analyze_photo_with_gemini(
-    image_bytes: bytes,
-    image_index: int,
-    image_width: int,
-    image_height: int,
+async def _analyze_photos_batch_with_gemini(
+    photos_to_analyze: List[Tuple[int, bytes, int, int]],
 ) -> List[DamageDetection]:
-    """Analyzes a single vehicle damage photo using Google Gemini Multimodal Vision API."""
+    """
+    Analyzes multiple vehicle damage photos in a SINGLE multimodal Gemini Vision API call.
+    This reduces API calls from N down to 1 per claim, completely eliminating 429 Rate Limit errors.
+    """
+    if not photos_to_analyze:
+        return []
+
     api_key = settings.active_api_key
     if not api_key:
-        raise VisionAPIError(f"GEMINI_API_KEY not configured. Cannot analyze photo #{image_index+1}. Set GEMINI_API_KEY in .env.")
+        raise VisionAPIError("GEMINI_API_KEY not configured. Set GEMINI_API_KEY in .env.")
 
     model = settings.GEMINI_MODEL
     url, headers = _get_gemini_endpoint_and_headers(model, api_key)
 
-    prompt = f"""
+    prompt = """
 You are an expert motor insurance vehicle damage assessor.
-Analyze this vehicle photo (Dimensions: {image_width}x{image_height} pixels).
-Identify all physically damaged parts and return strictly valid JSON matching this schema:
-{{
+Analyze the uploaded vehicle damage photos.
+For each damaged part visible in ANY photo, identify the damage and return strictly valid JSON matching this schema:
+{
   "detections": [
-    {{
+    {
+      "source_image_index": 0,
       "part_name": "front bumper",
       "material_type": "plastic-rubber",
       "severity": "minor",
       "repair_or_replace": "repair",
       "confidence": 0.95,
-      "bounding_box": {{
+      "bounding_box": {
         "x": 100,
         "y": 150,
         "w": 300,
         "h": 200
-      }}
-    }}
+      }
+    }
   ]
-}}
+}
 
 Guidelines:
-1. part_name: specify standard automotive parts (e.g. front bumper, rear bumper, bonnet, front left fender, headlight housing, windshield, door, rocker panel).
-2. material_type must be one of: "metal", "plastic-rubber", "glass", "fibreglass", "unknown".
-3. severity must be one of: "minor", "moderate", "severe".
-4. repair_or_replace must be one of: "repair", "replace".
-5. bounding_box coordinates (x, y, w, h) must be in exact pixel coordinates relative to the {image_width}x{image_height} image.
-6. If no damage is present, return {{"detections": []}}.
+1. source_image_index: 0-indexed position of the photo (0 for Photo #1, 1 for Photo #2, etc.).
+2. part_name: specify standard automotive parts (e.g. front bumper, rear bumper, bonnet, front left fender, headlight housing, windshield, door, rocker panel).
+3. material_type must be one of: "metal", "plastic-rubber", "glass", "fibreglass", "unknown".
+4. severity must be one of: "minor", "moderate", "severe".
+5. repair_or_replace must be one of: "repair", "replace".
+6. bounding_box coordinates (x, y, w, h) must be in exact pixel coordinates relative to that specific photo's dimensions.
+7. If no damage is present on any photo, return {"detections": []}.
 """
 
-    b64_img = base64.b64encode(image_bytes).decode("utf-8")
+    parts: List[Dict[str, Any]] = [{"text": prompt}]
+    for idx, photo_bytes, w, h in photos_to_analyze:
+        b64_img = base64.b64encode(photo_bytes).decode("utf-8")
+        parts.append({"text": f"Photo #{idx+1} (Dimensions: {w}x{h} px):"})
+        parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64_img}})
+
     payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt},
-                    {"inline_data": {"mime_type": "image/jpeg", "data": b64_img}},
-                ]
-            }
-        ],
+        "contents": [{"parts": parts}],
         "generationConfig": {"response_mime_type": "application/json", "temperature": 0.0},
     }
 
@@ -260,11 +263,11 @@ Guidelines:
             try:
                 async with httpx.AsyncClient(timeout=timeout) as client:
                     res = await client.post(url, json=payload, headers=headers)
-                    
+
                     if res.status_code == 429:
                         if attempt < settings.MAX_RETRIES:
-                            backoff = (settings.RATE_LIMIT_BACKOFF_FACTOR ** attempt) + 1.0
-                            logger.warning(f"Gemini 429 Rate Limit on photo #{image_index+1}. Retrying in {backoff:.1f}s")
+                            backoff = (settings.RATE_LIMIT_BACKOFF_FACTOR ** attempt) + 1.5
+                            logger.warning(f"Gemini 429 Rate Limit. Retrying in {backoff:.1f}s (Attempt {attempt+1})")
                             await asyncio.sleep(backoff)
                             continue
                         else:
@@ -285,9 +288,13 @@ Guidelines:
                         sev = raw_det.get("severity")
                         ror = raw_det.get("repair_or_replace")
                         conf = raw_det.get("confidence")
+                        src_idx = int(raw_det.get("source_image_index", 0))
+
+                        # Validate src_idx bounds
+                        if src_idx < 0 or src_idx >= len(photos_to_analyze):
+                            src_idx = 0
 
                         # Skip detections where Gemini didn't return required fields
-                        # rather than fabricating plausible defaults
                         if not sev or sev not in ("minor", "moderate", "severe"):
                             logger.warning(f"Skipping detection '{part}': missing/invalid severity '{sev}'")
                             continue
@@ -295,9 +302,8 @@ Guidelines:
                             logger.warning(f"Skipping detection '{part}': missing/invalid repair_or_replace '{ror}'")
                             continue
                         if conf is None:
-                            logger.warning(f"Detection '{part}' missing confidence score, defaulting to 0.5")
-                            conf = 0.5  # Honest low default, not 0.9
-                        
+                            conf = 0.5  # Honest default
+
                         results.append(
                             DamageDetection(
                                 part_name=part,
@@ -311,7 +317,7 @@ Guidelines:
                                     w=max(1, int(bb.get("w", 100))),
                                     h=max(1, int(bb.get("h", 100))),
                                 ),
-                                source_image_index=image_index,
+                                source_image_index=photos_to_analyze[src_idx][0],
                             )
                         )
                     return results
@@ -320,9 +326,11 @@ Guidelines:
                 if attempt < settings.MAX_RETRIES:
                     await asyncio.sleep(1.0)
                     continue
-                raise VisionTimeoutError(f"Gemini Vision call timed out for photo #{image_index+1}: {str(e)}")
+                raise VisionTimeoutError(f"Gemini Vision call timed out: {str(e)}")
             except (json.JSONDecodeError, KeyError, IndexError) as e:
-                raise VisionAPIError(f"Failed to parse Gemini Vision response for photo #{image_index+1}: {str(e)}")
+                raise VisionAPIError(f"Failed to parse Gemini Vision response: {str(e)}")
+
+    return []
 
 
 # ------------------------------------------------------------------------------
@@ -335,7 +343,7 @@ async def extract_damage_assessment(
     """
     Main extraction interface:
     1. Runs Custom Model locally first if weights exist.
-    2. Falls back to pure Gemini 3.5 Flash Lite if custom model is unavailable or confidence is low.
+    2. Batches all remaining photos into a SINGLE Multimodal Gemini Vision call (1 API request total).
     """
     if not photos:
         return DamageAssessmentResponse(
@@ -351,39 +359,31 @@ async def extract_damage_assessment(
         img = validate_and_decode_photo(photo_bytes, filename=f"damage_photo_{idx+1}")
         dimensions.append(img.size)
 
-    # 2. Execution Pipeline (Custom Model Primary -> Gemini Vision)
+    # 2. Execution Pipeline (Custom Model Primary -> Single Batched Gemini Vision)
     all_detections: List[DamageDetection] = []
-    logger.info(f"Analyzing {len(photos)} photos (Custom Model + Gemini Vision)")
+    gemini_batch_photos: List[Tuple[int, bytes, int, int]] = []
 
-    # Step A: Run custom model on all photos first (synchronous, fast)
-    gemini_fallback_tasks = []
+    logger.info(f"Analyzing {len(photos)} damage photo(s)")
+
     for idx, photo_bytes in photos:
         w, h = dimensions[idx]
         custom_dets = _run_custom_model_on_photo(photo_bytes, idx, w, h)
         if custom_dets is not None and len(custom_dets) > 0:
-            logger.info(f"Photo #{idx+1} successfully analyzed via Custom Model ({len(custom_dets)} detections)")
+            logger.info(f"Photo #{idx+1} analyzed via Custom Model ({len(custom_dets)} detections)")
             all_detections.extend(custom_dets)
         else:
-            logger.info(f"Photo #{idx+1}: Custom Model unavailable/no detections. Queuing Gemini Vision API fallback.")
-            gemini_fallback_tasks.append((idx, photo_bytes, w, h))
+            gemini_batch_photos.append((idx, photo_bytes, w, h))
 
-    # Step B: Run ALL Gemini fallback calls in PARALLEL (not sequentially)
-    # This reduces latency from N*25s to just 25s regardless of photo count.
-    if gemini_fallback_tasks:
-        logger.info(f"Running {len(gemini_fallback_tasks)} Gemini Vision calls in parallel")
-        async def _safe_gemini(idx: int, photo_bytes: bytes, w: int, h: int) -> List[DamageDetection]:
-            try:
-                return await _analyze_photo_with_gemini(photo_bytes, idx, w, h)
-            except Exception as e:
-                logger.warning(f"Gemini Fallback failed for photo #{idx+1}: {str(e)}")
-                return []
+    # Step B: Run ALL remaining photos in a SINGLE Batched Gemini Vision call
+    if gemini_batch_photos:
+        logger.info(f"Submitting {len(gemini_batch_photos)} photo(s) in a SINGLE batched Gemini Vision call")
+        try:
+            gemini_dets = await _analyze_photos_batch_with_gemini(gemini_batch_photos)
+            all_detections.extend(gemini_dets)
+        except Exception as e:
+            logger.warning(f"Gemini Batched Vision call failed: {str(e)}")
 
-        parallel_results = await asyncio.gather(
-            *[_safe_gemini(idx, pb, w, h) for idx, pb, w, h in gemini_fallback_tasks]
-        )
-        for dets in parallel_results:
-            all_detections.extend(dets)
-    # 4. Compute overall damage status
+    # 3. Compute overall damage status
     severities = [d.severity for d in all_detections]
     overall_status = calculate_overall_status(severities)
 

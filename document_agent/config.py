@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     
     # Gemini Configuration (Optimized for Flash-Lite with 15 RPM rate limits)
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-3.5-flash-lite"  # Target provider model name
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
     
     # Timeouts & Rate-Limit Resilience
     REQUEST_TIMEOUT_SECONDS: float = 20.0

@@ -537,97 +537,54 @@ async def extract_documents(
     dl_data = {}
     form_data = {}
 
-    # 2. Primary Extraction
+    # 2. Primary Extraction & Consolidation
     if settings.PRIMARY_OCR_ENGINE == "local":
         logger.info("Executing Primary Layer: Local OCR extraction")
         rc_text, rc_conf = _run_local_tesseract_ocr(rc_bytes)
         dl_text, dl_conf = _run_local_tesseract_ocr(dl_bytes)
         form_text, form_conf = _run_local_tesseract_ocr(claim_form_bytes)
 
-        # If local OCR failed to extract meaningful text (e.g. non-standard image, handwriting, or missing tesseract)
-        total_text_len = len(rc_text.strip()) + len(dl_text.strip()) + len(form_text.strip())
-        if total_text_len < 20:
-            logger.info("Local OCR returned minimal text. Elevating directly to Full Vision API.")
-            extracted_dict = await _call_full_vision_api(rc_bytes, dl_bytes, claim_form_bytes)
-            rc_data = extracted_dict.get("rc", {}) or {}
-            dl_data = extracted_dict.get("dl", {}) or {}
-            form_data = extracted_dict.get("claim_form", {}) or {}
-            fallback_count += 1
+        rc_data = _parse_rc_locally(rc_text, rc_conf)
+        dl_data = _parse_dl_locally(dl_text, dl_conf)
+        form_data = _parse_claim_form_locally(form_text, form_conf)
 
-            # Fast-fail: If all 3 documents returned empty from Vision API, this is likely
-            # a completely unrelated/stock image set. Skip expensive LLM disambiguation.
-            all_empty = not any([rc_data, dl_data, form_data])
-            if all_empty:
-                logger.warning(
-                    "Vision API returned empty for all 3 documents. "
-                    "Likely unrelated/stock images uploaded. Skipping LLM disambiguation to prevent timeout."
-                )
-                return RawExtractedDocuments(
-                    rc=ExtractedRCDocument(),
-                    dl=ExtractedDLDocument(),
-                    claim_form=ExtractedClaimFormDocument(),
-                    fallback_invocations_count=fallback_count,
-                )
-        else:
-            rc_data = _parse_rc_locally(rc_text, rc_conf)
-            dl_data = _parse_dl_locally(dl_text, dl_conf)
-            form_data = _parse_claim_form_locally(form_text, form_conf)
+        # Check if critical identity fields are unreadable from local OCR
+        needs_ai_vision = (
+            rc_data.get("make") == "UNKNOWN"
+            or not rc_data.get("rc_number")
+            or not dl_data.get("dl_number")
+            or form_data.get("damage_description_confidence", 0) < th
+        )
+
+        if needs_ai_vision:
+            logger.info("Local OCR has missing/low-confidence fields. Calling Multimodal Vision API in a single consolidated request.")
+            try:
+                extracted_dict = await _call_full_vision_api(rc_bytes, dl_bytes, claim_form_bytes)
+                ai_rc = extracted_dict.get("rc", {}) or {}
+                ai_dl = extracted_dict.get("dl", {}) or {}
+                ai_form = extracted_dict.get("claim_form", {}) or {}
+
+                # Merge AI vision results over missing local fields
+                for k, v in ai_rc.items():
+                    if v and v != "Unreadable / Missing" and (not rc_data.get(k) or rc_data.get(k) == "UNKNOWN" or rc_data.get(k + "_confidence", 0) < 0.7):
+                        rc_data[k] = v
+                for k, v in ai_dl.items():
+                    if v and v != "Unreadable / Missing" and (not dl_data.get(k) or dl_data.get(k) == "Unreadable / Missing" or dl_data.get(k + "_confidence", 0) < 0.7):
+                        dl_data[k] = v
+                for k, v in ai_form.items():
+                    if v and v != "Unreadable / Missing" and (not form_data.get(k) or form_data.get(k) == "Unreadable / Missing" or form_data.get(k + "_confidence", 0) < 0.7):
+                        form_data[k] = v
+
+                fallback_count += 1
+            except Exception as vision_err:
+                logger.warning(f"Consolidated Vision API fallback error: {vision_err}")
     else:
         logger.info("Executing Primary Layer: Full Vision API extraction")
         extracted_dict = await _call_full_vision_api(rc_bytes, dl_bytes, claim_form_bytes)
         rc_data = extracted_dict.get("rc", {}) or {}
         dl_data = extracted_dict.get("dl", {}) or {}
         form_data = extracted_dict.get("claim_form", {}) or {}
-
-    # 3. Selective LLM Disambiguation — run all 3 documents IN PARALLEL for 3x speedup
-    if settings.PRIMARY_OCR_ENGINE == "local":
-        async def _disambiguate_doc(data_dict: Dict[str, Any], doc_type: str, img_bytes: bytes, hint: str):
-            """Runs LLM fallback for low-confidence fields in a single document."""
-            keys = []
-            for k, v in list(data_dict.items()):
-                if k.endswith("_confidence"):
-                    field_name = k.replace("_confidence", "")
-                    conf = v
-                    val = data_dict.get(field_name, "")
-                    if conf < th and field_name != "confidence":
-                        keys.append((field_name, str(val), float(conf)))
-            
-            # Fail-Fast: if >=3 fields are unreadable, the image is likely invalid or non-document.
-            # Calling LLM for 3+ fields per doc costs too many API credits and time.
-            if len(keys) >= 3:
-                logger.warning(f"[{doc_type}] {len(keys)} low-conf fields. Skipping LLM disambiguation (fail-fast). Image may be low-quality or non-standard.")
-                return
-
-            tasks = [
-                _run_selective_llm_disambiguation(
-                    img_bytes, doc_type, field_name, val, conf, context_hint=hint
-                )
-                for field_name, val, conf in keys
-            ]
-
-            if tasks:
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                for res in results:
-                    if isinstance(res, Exception):
-                        logger.warning(f"[{doc_type}] LLM disambiguation task failed: {res}")
-                        continue
-                    fname = res.get("field_name")
-                    if fname:
-                        data_dict[fname] = res["repaired_value"]
-                        data_dict[fname + "_confidence"] = res["confidence"]
-
-        # Run disambiguation for all 3 documents IN PARALLEL (not sequentially)
-        disambig_tasks = []
-        if rc_data:
-            disambig_tasks.append(_disambiguate_doc(rc_data, "RC", rc_bytes, policy_hint.vehicle_number if policy_hint and hasattr(policy_hint, 'vehicle_number') else (policy_hint.rc_number if policy_hint else "")))
-        if dl_data:
-            disambig_tasks.append(_disambiguate_doc(dl_data, "DL", dl_bytes, ""))
-        if form_data:
-            disambig_tasks.append(_disambiguate_doc(form_data, "CLAIM_FORM", claim_form_bytes, ""))
-
-        if disambig_tasks:
-            await asyncio.gather(*disambig_tasks, return_exceptions=True)
-            fallback_count += len(disambig_tasks)
+        fallback_count += 1
     # Ensure required plate_number mapping
     if "plate_number" not in rc_data or not rc_data["plate_number"]:
         rc_data["plate_number"] = rc_data.get("rc_number", "Unreadable / Missing")
