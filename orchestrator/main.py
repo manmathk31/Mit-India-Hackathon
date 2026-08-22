@@ -584,11 +584,13 @@ async def proxy_validate_single_document(
         content = await file.read()
         files = {"file": (file.filename or "upload.jpg", content, file.content_type or "image/jpeg")}
         data = {"expected_type": expected_type}
-        async with httpx.AsyncClient(timeout=15.0) as client:
+        async with httpx.AsyncClient(timeout=30.0) as client:
             res = await client.post(url, files=files, data=data)
             if res.status_code == 200:
                 return res.json()
             logger.warning(f"Document Agent validate-single returned HTTP {res.status_code}: {res.text[:200]}")
+    except httpx.TimeoutException:
+        logger.info(f"Pre-validation for '{expected_type}' timed out after 30s — failing open gracefully.")
     except Exception as e:
         logger.exception(f"Error forwarding document pre-validation to {url}: {e}")
 

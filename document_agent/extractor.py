@@ -77,8 +77,11 @@ def validate_and_check_image_quality(image_bytes: bytes, filename: str = "docume
 
 
 def _preprocess_image_for_ocr(img: Image.Image) -> Image.Image:
-    """Preprocesses image with grayscale, contrast enhancement, and noise filtering for local OCR."""
-    gray = img.convert("L")
+    """Preprocesses image with grayscale, contrast enhancement, and downscaling for fast local OCR."""
+    # Downscale high-resolution images to max 1200px to prevent high CPU latency on cloud instances
+    img_copy = img.copy()
+    img_copy.thumbnail((1200, 1200), Image.Resampling.LANCZOS)
+    gray = img_copy.convert("L")
     enhancer = ImageEnhance.Contrast(gray)
     enhanced = enhancer.enhance(1.8)
     return enhanced
