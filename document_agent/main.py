@@ -14,6 +14,7 @@ from .extractor import (
     ExtractionTimeoutError,
     InvalidImageContentError,
     extract_documents,
+    validate_single_document,
 )
 from .logger import logger
 from .schemas import (
@@ -258,3 +259,32 @@ async def verify_claim_documents(
     )
 
     return response_data
+
+
+@app.post(
+    "/documents/validate-single",
+    tags=["Validation"],
+    summary="Lightweight single-document pre-validation on upload",
+)
+async def validate_single_upload(
+    file: UploadFile = File(..., description="Uploaded document image file"),
+    expected_type: str = Form(..., description="Expected document type: rc | dl | claim_form"),
+):
+    """
+    Instantly validates whether the uploaded file appears to be the expected document type (RC, DL, or Claim Form).
+    Rejects wrong document types (e.g. uploading DL in RC slot or arbitrary selfie/damage photos) before submission.
+    """
+    try:
+        image_bytes = await _read_and_validate_file(file, f"upload_{expected_type}")
+        result = await validate_single_document(image_bytes, expected_type)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Error during single document pre-validation: {e}")
+        return {
+            "valid": False,
+            "expected_type": expected_type,
+            "detected_type": "UNKNOWN",
+            "reason": f"Could not validate document: {str(e)}",
+        }

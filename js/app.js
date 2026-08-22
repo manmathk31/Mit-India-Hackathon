@@ -1450,9 +1450,11 @@ function renderSubmissionScreen(container) {
           <div class="flex items-center justify-between">
             <div>
               <h2 class="text-lg font-bold font-display text-slate-900">Step 1: Upload Identity &amp; Vehicle Credentials</h2>
-              <p class="text-xs text-slate-500">Attach RC, Driving Licence, and Claim Form</p>
+              <p class="text-xs text-slate-500">Attach and auto-verify RC, Driving Licence, and Claim Form</p>
             </div>
-            <span class="text-xs font-semibold px-3 py-1 rounded-full ${docsCount === 3 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}">${docsCount}/3 Attached</span>
+            <span class="text-xs font-semibold px-3 py-1 rounded-full ${docsCount === 3 && Object.values(AppState.uploads.docs).every(d => d?.valid) ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}">
+              ${Object.values(AppState.uploads.docs).filter(d => d?.valid).length}/3 Verified
+            </span>
           </div>
 
           <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -1460,23 +1462,56 @@ function renderSubmissionScreen(container) {
               const titles = { rc: 'Registration Certificate (RC)', dl: 'Driving Licence (DL)', claimForm: 'Claim Intimation Form' };
               const uploadedDoc = AppState.uploads.docs[docKey];
               const isUploaded = Boolean(uploadedDoc);
+              const isValidating = uploadedDoc?.validating;
+              const isInvalid = uploadedDoc?.valid === false;
+              const isValid = uploadedDoc?.valid === true;
+
+              let borderClass = 'border-dashed border-slate-300 bg-white/70 hover:border-indigo-400';
+              let iconBg = 'bg-indigo-50 text-indigo-700';
+              let iconName = 'upload-cloud';
+
+              if (isValidating) {
+                borderClass = 'border-amber-400 bg-amber-50/40 animate-pulse';
+                iconBg = 'bg-amber-100 text-amber-700';
+                iconName = 'loader-2';
+              } else if (isInvalid) {
+                borderClass = 'border-rose-500 bg-rose-50/50 shadow-sm shadow-rose-100';
+                iconBg = 'bg-rose-500 text-white';
+                iconName = 'alert-triangle';
+              } else if (isValid) {
+                borderClass = 'border-emerald-500 bg-emerald-50/40';
+                iconBg = 'bg-emerald-500 text-white';
+                iconName = 'check-circle-2';
+              }
               
               return `
-                <div class="p-5 rounded-2xl border-2 ${isUploaded ? 'border-emerald-500 bg-emerald-50/40' : 'border-dashed border-slate-300 bg-white/70 hover:border-indigo-400'} flex flex-col justify-between min-h-[180px] text-center transition-all">
+                <div class="p-5 rounded-2xl border-2 ${borderClass} flex flex-col justify-between min-h-[190px] text-center transition-all">
                   <div>
-                    <div class="w-11 h-11 rounded-2xl mx-auto flex items-center justify-center ${isUploaded ? 'bg-emerald-500 text-white' : 'bg-indigo-50 text-indigo-700'} mb-2.5 shadow-xs">
-                      <i data-lucide="${isUploaded ? 'check-circle-2' : 'upload-cloud'}" class="w-6 h-6"></i>
+                    <div class="w-11 h-11 rounded-2xl mx-auto flex items-center justify-center ${iconBg} mb-2.5 shadow-xs">
+                      <i data-lucide="${iconName}" class="w-6 h-6 ${isValidating ? 'animate-spin' : ''}"></i>
                     </div>
                     <div class="text-xs font-bold text-slate-800">${titles[docKey]}</div>
-                    <div class="text-[11px] text-slate-500 mt-1 truncate max-w-[200px] mx-auto">
-                      ${isUploaded ? (uploadedDoc.name || 'Attached &bull; Ready') : 'JPG, PNG, or PDF'}
-                    </div>
-                    ${isUploaded && uploadedDoc.size ? `<div class="text-[10px] text-emerald-700 font-mono mt-0.5">${uploadedDoc.size}</div>` : ''}
+                    
+                    ${isValidating ? `
+                      <div class="text-[11px] text-amber-700 font-semibold mt-1">Scanning document integrity...</div>
+                    ` : isInvalid ? `
+                      <div class="text-[11px] text-rose-700 font-bold mt-1">⚠️ Wrong Document Detected</div>
+                      <div class="text-[10px] text-rose-600 mt-0.5 leading-tight px-1">${uploadedDoc.error || 'Does not match expected type'}</div>
+                    ` : isValid ? `
+                      <div class="text-[11px] text-emerald-700 font-semibold mt-1">✓ Verified ${docKey.toUpperCase()} Document</div>
+                      <div class="text-[10px] text-slate-500 truncate max-w-[200px] mx-auto mt-0.5">${uploadedDoc.name}</div>
+                    ` : `
+                      <div class="text-[11px] text-slate-500 mt-1 truncate max-w-[200px] mx-auto">JPG, PNG, or WebP</div>
+                    `}
                   </div>
 
                   <div class="mt-3">
-                    <input type="file" id="input-${docKey}" accept="image/*,.pdf" onchange="handleRealFileUpload(event, '${docKey}')" class="hidden" />
-                    ${isUploaded ? `
+                    <input type="file" id="input-${docKey}" accept="image/*" onchange="handleRealFileUpload(event, '${docKey}')" class="hidden" />
+                    ${isInvalid ? `
+                      <button onclick="document.getElementById('input-${docKey}').click()" class="px-3.5 py-1.5 text-xs font-bold text-white bg-rose-600 hover:bg-rose-700 rounded-xl shadow-xs cursor-pointer">
+                        Re-upload Correct Document
+                      </button>
+                    ` : isUploaded ? `
                       <button onclick="clearDocUpload('${docKey}')" class="text-xs font-bold text-rose-600 hover:underline">Remove</button>
                     ` : `
                       <button onclick="document.getElementById('input-${docKey}').click()" class="px-3.5 py-1.5 text-xs font-bold text-indigo-900 bg-white border border-indigo-200 rounded-xl shadow-xs hover:bg-indigo-50 cursor-pointer">
@@ -1490,11 +1525,15 @@ function renderSubmissionScreen(container) {
           </div>
 
           <div class="flex justify-end pt-4 border-t border-slate-100">
-            ${docsCount < 3 ? `
+            ${(docsCount < 3 || Object.values(AppState.uploads.docs).some(d => d?.valid === false || d?.validating)) ? `
               <div class="flex items-center gap-3 ml-auto">
                 <span class="text-xs text-amber-700 font-semibold flex items-center gap-1.5">
                   <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i>
-                  ${3 - docsCount} document${3 - docsCount > 1 ? 's' : ''} still needed
+                  ${Object.values(AppState.uploads.docs).some(d => d?.valid === false)
+                    ? 'Resolve invalid document errors to proceed'
+                    : Object.values(AppState.uploads.docs).some(d => d?.validating)
+                    ? 'Verifying uploaded files...'
+                    : `${3 - docsCount} document${3 - docsCount > 1 ? 's' : ''} still needed`}
                 </span>
                 <button disabled class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 opacity-40 cursor-not-allowed">
                   <span>Next: Damage Photos</span>
@@ -1511,15 +1550,17 @@ function renderSubmissionScreen(container) {
         </div>
       ` : ''}
 
-      <!-- STEP 2: DAMAGE PHOTOS -->
+      <!-- STEP 2: DAMAGE PHOTOS (4 REQUIRED ANGLES) -->
       ${AppState.currentStep === 2 ? `
         <div class="glass-card rounded-3xl p-6 sm:p-8 border border-white/90 space-y-6">
           <div class="flex items-center justify-between">
             <div>
               <h2 class="text-lg font-bold font-display text-slate-900">Step 2: Upload Vehicle Damage Photos</h2>
-              <p class="text-xs text-slate-500">Capture or upload photos of damaged areas for YOLO + Gemini inspection</p>
+              <p class="text-xs text-slate-500">All 4 standard angles are mandatory for 360° damage triangulation</p>
             </div>
-            <span class="text-xs font-semibold px-3 py-1 rounded-full ${photosCount >= 1 ? 'bg-emerald-100 text-emerald-800' : 'bg-slate-100 text-slate-600'}">${photosCount}/4 Attached</span>
+            <span class="text-xs font-semibold px-3 py-1 rounded-full ${photosCount === 4 ? 'bg-emerald-100 text-emerald-800' : 'bg-amber-100 text-amber-800'}">
+              ${photosCount}/4 Mandatory Angles
+            </span>
           </div>
 
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -1534,8 +1575,11 @@ function renderSubmissionScreen(container) {
                     <img src="${uploadedPhoto.preview}" alt="${labels[slot]}" class="absolute inset-0 w-full h-full object-cover opacity-30 pointer-events-none" />
                   ` : ''}
                   <div class="relative z-10">
-                    <div class="text-xs font-bold text-slate-800">${labels[slot]}</div>
-                    <div class="text-[10px] text-slate-500 mt-0.5 truncate">${isCaptured ? (uploadedPhoto.name || 'Photo Attached') : 'Optical View'}</div>
+                    <div class="text-xs font-bold text-slate-800 flex items-center justify-center gap-1">
+                      ${labels[slot]}
+                      <span class="text-rose-500 text-xs">*</span>
+                    </div>
+                    <div class="text-[10px] text-slate-500 mt-0.5 truncate">${isCaptured ? (uploadedPhoto.name || 'Photo Attached') : 'Required Angle'}</div>
                   </div>
 
                   <div class="mt-2 relative z-10">
@@ -1557,11 +1601,11 @@ function renderSubmissionScreen(container) {
             <button onclick="goToStep(1)" class="px-4 py-2 text-xs font-bold text-slate-700 bg-white border border-slate-200 rounded-xl cursor-pointer">
               Back
             </button>
-            ${photosCount === 0 ? `
+            ${photosCount < 4 ? `
               <div class="flex items-center gap-3">
                 <span class="text-xs text-amber-700 font-semibold flex items-center gap-1.5">
                   <i data-lucide="alert-circle" class="w-3.5 h-3.5"></i>
-                  At least 1 photo required
+                  ${4 - photosCount} angle photo${4 - photosCount > 1 ? 's' : ''} remaining (All 4 required)
                 </span>
                 <button disabled class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs sm:text-sm font-bold flex items-center gap-2 opacity-40 cursor-not-allowed">
                   <span>Next: Review &amp; Submit</span>
@@ -1596,17 +1640,19 @@ function renderSubmissionScreen(container) {
           <div class="p-4 rounded-2xl bg-slate-50 border border-slate-200/80 max-w-md mx-auto text-left text-xs space-y-2.5">
             <div class="flex items-center justify-between">
               <span class="text-slate-600 flex items-center gap-1.5">
-                <i data-lucide="${docsCount === 3 ? 'check-circle-2' : 'alert-circle'}" class="w-3.5 h-3.5 ${docsCount === 3 ? 'text-emerald-600' : 'text-amber-500'}"></i>
+                <i data-lucide="${docsCount === 3 && Object.values(AppState.uploads.docs).every(d => d?.valid) ? 'check-circle-2' : 'alert-circle'}" class="w-3.5 h-3.5 ${docsCount === 3 && Object.values(AppState.uploads.docs).every(d => d?.valid) ? 'text-emerald-600' : 'text-amber-500'}"></i>
                 Attached Documents:
               </span>
-              <strong class="${docsCount === 3 ? 'text-emerald-700' : 'text-amber-700'}">${docsCount}/3 Required</strong>
+              <strong class="${docsCount === 3 && Object.values(AppState.uploads.docs).every(d => d?.valid) ? 'text-emerald-700' : 'text-amber-700'}">
+                ${Object.values(AppState.uploads.docs).filter(d => d?.valid).length}/3 Verified
+              </strong>
             </div>
             <div class="flex items-center justify-between">
               <span class="text-slate-600 flex items-center gap-1.5">
-                <i data-lucide="${photosCount >= 1 ? 'check-circle-2' : 'alert-circle'}" class="w-3.5 h-3.5 ${photosCount >= 1 ? 'text-emerald-600' : 'text-amber-500'}"></i>
+                <i data-lucide="${photosCount === 4 ? 'check-circle-2' : 'alert-circle'}" class="w-3.5 h-3.5 ${photosCount === 4 ? 'text-emerald-600' : 'text-amber-500'}"></i>
                 Vehicle Damage Photos:
               </span>
-              <strong class="${photosCount >= 1 ? 'text-emerald-700' : 'text-amber-700'}">${photosCount} Uploaded ${photosCount === 0 ? '(min 1 required)' : ''}</strong>
+              <strong class="${photosCount === 4 ? 'text-emerald-700' : 'text-amber-700'}">${photosCount}/4 Required Angles Uploaded</strong>
             </div>
             <div class="flex items-center justify-between">
               <span class="text-slate-600 flex items-center gap-1.5">
@@ -1618,14 +1664,15 @@ function renderSubmissionScreen(container) {
           </div>
 
           <!-- Block launch if requirements not met -->
-          ${(docsCount < 3 || photosCount === 0) ? `
+          ${(docsCount < 3 || Object.values(AppState.uploads.docs).some(d => d?.valid === false) || photosCount < 4) ? `
             <div class="max-w-md mx-auto p-3.5 rounded-2xl bg-amber-50 border border-amber-300 flex items-start gap-3 text-left">
               <i data-lucide="triangle-alert" class="w-5 h-5 text-amber-600 shrink-0 mt-0.5"></i>
               <div>
                 <p class="text-xs font-bold text-amber-900">Cannot launch — requirements not met</p>
                 <ul class="text-xs text-amber-800 mt-1 space-y-0.5 list-disc list-inside">
                   ${docsCount < 3 ? `<li>${3 - docsCount} required document(s) missing — go back to Step 1</li>` : ''}
-                  ${photosCount === 0 ? '<li>At least 1 damage photo required — go back to Step 2</li>' : ''}
+                  ${Object.values(AppState.uploads.docs).some(d => d?.valid === false) ? `<li>One or more documents were rejected — go back to Step 1 and re-upload</li>` : ''}
+                  ${photosCount < 4 ? `<li>${4 - photosCount} damage photo(s) missing (All 4 angles required) — go back to Step 2</li>` : ''}
                 </ul>
               </div>
             </div>
@@ -1636,9 +1683,9 @@ function renderSubmissionScreen(container) {
               Back
             </button>
             <button
-              onclick="${(docsCount < 3 || photosCount === 0) ? 'void(0)' : 'startAiProcessing()'}"
-              ${(docsCount < 3 || photosCount === 0) ? 'disabled' : ''}
-              class="btn-indigo text-white px-8 py-3.5 rounded-2xl font-bold text-sm shadow-xl flex items-center gap-2 ${(docsCount < 3 || photosCount === 0) ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}"
+              onclick="${(docsCount < 3 || Object.values(AppState.uploads.docs).some(d => d?.valid === false) || photosCount < 4) ? 'void(0)' : 'startAiProcessing()'}"
+              ${(docsCount < 3 || Object.values(AppState.uploads.docs).some(d => d?.valid === false) || photosCount < 4) ? 'disabled' : ''}
+              class="btn-indigo text-white px-8 py-3.5 rounded-2xl font-bold text-sm shadow-xl flex items-center gap-2 ${(docsCount < 3 || Object.values(AppState.uploads.docs).some(d => d?.valid === false) || photosCount < 4) ? 'opacity-40 cursor-not-allowed' : 'cursor-pointer'}"
             >
               <i data-lucide="play" class="w-4 h-4 text-amber-300 fill-amber-300"></i>
               <span>Launch Autonomous Settlement</span>
@@ -1659,42 +1706,112 @@ function goToStep(s) {
 function handleStep1Next() {
   const { rc, dl, claimForm } = AppState.uploads.docs;
   const missing = [];
-  if (!rc)        missing.push('Registration Certificate (RC)');
-  if (!dl)        missing.push('Driving Licence (DL)');
-  if (!claimForm) missing.push('Claim Intimation Form');
+  if (!rc || !rc.file)        missing.push('Registration Certificate (RC)');
+  if (!dl || !dl.file)        missing.push('Driving Licence (DL)');
+  if (!claimForm || !claimForm.file) missing.push('Claim Intimation Form');
 
   if (missing.length > 0) {
     showValidationToast(
       `Missing ${missing.length} document${missing.length > 1 ? 's' : ''}`,
       `Please upload: ${missing.join(', ')}`
     );
-    return; // Block navigation
+    return;
   }
+
+  const invalidDocs = Object.entries(AppState.uploads.docs).filter(([k, v]) => v?.valid === false);
+  if (invalidDocs.length > 0) {
+    showValidationToast(
+      'Invalid Document Detected',
+      'One or more uploaded documents do not match the expected document type. Please re-upload the correct documents before proceeding.'
+    );
+    return;
+  }
+
+  const validatingDocs = Object.values(AppState.uploads.docs).filter(d => d?.validating);
+  if (validatingDocs.length > 0) {
+    showValidationToast(
+      'Document Still Scanning',
+      'Please wait a moment for document integrity verification to finish.'
+    );
+    return;
+  }
+
   goToStep(2);
 }
 
 function handleStep2Next() {
-  const photoCount = Object.values(AppState.uploads.photos).filter(Boolean).length;
-  if (photoCount === 0) {
+  const photos = AppState.uploads.photos;
+  const missing = [];
+  if (!photos.front) missing.push('Front Damage');
+  if (!photos.rear) missing.push('Rear Profile');
+  if (!photos.leftSide) missing.push('Left Side');
+  if (!photos.rightSide) missing.push('Right Side');
+
+  if (missing.length > 0) {
     showValidationToast(
-      'No damage photos uploaded',
-      'Upload at least 1 vehicle damage photo (front, rear, left side, or right side) to proceed.'
+      `All 4 vehicle angles required (${missing.length} missing)`,
+      `Please capture all 4 angles for full 360° AI assessment. Missing: ${missing.join(', ')}`
     );
-    return; // Block navigation
+    return;
   }
   goToStep(3);
 }
 
-function handleRealFileUpload(event, docKey) {
+async function handleRealFileUpload(event, docKey) {
   const file = event.target.files[0];
   if (!file) return;
+
   AppState.uploads.docs[docKey] = {
     name: file.name,
     size: (file.size / 1024).toFixed(1) + " KB",
-    file: file
+    file: file,
+    validating: true,
+    valid: null,
+    error: null,
   };
   renderApp();
-  showToast(`Attached ${file.name}`);
+
+  // Call instant single document validation
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('expected_type', docKey);
+
+    const res = await fetch('/documents/validate-single', {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      if (AppState.uploads.docs[docKey] && AppState.uploads.docs[docKey].file === file) {
+        AppState.uploads.docs[docKey].validating = false;
+        AppState.uploads.docs[docKey].valid = Boolean(data.valid);
+        if (data.valid) {
+          AppState.uploads.docs[docKey].reason = data.reason;
+          showToast(`✓ Valid ${docKey.toUpperCase()} verified`);
+        } else {
+          AppState.uploads.docs[docKey].error = data.reason || `Does not appear to be an official ${docKey.toUpperCase()}`;
+          showValidationToast('Wrong Document Uploaded', AppState.uploads.docs[docKey].error);
+        }
+        renderApp();
+      }
+    } else {
+      // If validation endpoint is unavailable, mark as tentatively valid
+      if (AppState.uploads.docs[docKey]) {
+        AppState.uploads.docs[docKey].validating = false;
+        AppState.uploads.docs[docKey].valid = true;
+        renderApp();
+      }
+    }
+  } catch (e) {
+    console.warn("Document pre-validation request failed:", e);
+    if (AppState.uploads.docs[docKey]) {
+      AppState.uploads.docs[docKey].validating = false;
+      AppState.uploads.docs[docKey].valid = true;
+      renderApp();
+    }
+  }
 }
 
 function clearDocUpload(docKey) {
@@ -1753,11 +1870,22 @@ async function startAiProcessing() {
     photos: realPhotos.map(p => `${p.name} (${(p.size / 1024).toFixed(1)} KB)`),
   });
 
-  if (!rcFile || !dlFile || !formFile || realPhotos.length === 0) {
-    console.warn("[ClaimPilot AI] Document validation failed: Missing required files.");
+  if (!rcFile || !dlFile || !formFile || realPhotos.length < 4) {
+    console.warn("[ClaimPilot AI] Document/photo validation failed: Missing required files or angles.");
     showPipelineError(
-      'Missing Required Documents',
-      'Please upload all 3 required documents (RC, Driving Licence, Claim Form) and at least 1 vehicle damage photo before launching autonomous adjudication.',
+      'Incomplete Submission Requirements',
+      'Please upload all 3 verified documents (RC, Driving Licence, Claim Form) and all 4 mandatory vehicle damage photos (Front, Rear, Left, Right) before launching autonomous adjudication.',
+      'validation_error'
+    );
+    return;
+  }
+
+  const hasInvalidDoc = Object.values(AppState.uploads.docs).some(d => d?.valid === false);
+  if (hasInvalidDoc) {
+    console.warn("[ClaimPilot AI] Launch blocked: One or more documents failed validation.");
+    showPipelineError(
+      'Invalid Document Attached',
+      'One or more uploaded documents were identified as incorrect or unreadable. Please go back to Step 1 and re-upload the correct documents.',
       'validation_error'
     );
     return;

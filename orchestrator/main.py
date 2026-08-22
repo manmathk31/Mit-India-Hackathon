@@ -2,11 +2,12 @@ import asyncio
 import json
 import time
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Optional, Tuple
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile, status
+import httpx
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -564,6 +565,38 @@ async def process_claim(
                 timestamp=datetime.now(timezone.utc).isoformat(),
             ).model_dump(),
         )
+
+
+@app.post(
+    "/documents/validate-single",
+    tags=["Validation"],
+    summary="Pre-validates a single uploaded document before claim submission",
+)
+async def proxy_validate_single_document(
+    file: UploadFile = File(..., description="Uploaded document image file"),
+    expected_type: str = Form(..., description="Expected document type: rc | dl | claim_form"),
+):
+    """
+    Proxies document validation to Document Agent to detect wrong document types at upload time.
+    """
+    url = f"{settings.DOCUMENT_AGENT_URL.rstrip('/')}/documents/validate-single"
+    try:
+        content = await file.read()
+        files = {"file": (file.filename or "upload.jpg", content, file.content_type or "image/jpeg")}
+        data = {"expected_type": expected_type}
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            res = await client.post(url, files=files, data=data)
+            if res.status_code == 200:
+                return res.json()
+            return JSONResponse(status_code=res.status_code, content=res.json())
+    except Exception as e:
+        logger.warning(f"Error forwarding document pre-validation: {e}")
+        return {
+            "valid": False,
+            "expected_type": expected_type,
+            "detected_type": "UNKNOWN",
+            "reason": f"Validation service unavailable: {str(e)}",
+        }
 
 
 # ------------------------------------------------------------------------------

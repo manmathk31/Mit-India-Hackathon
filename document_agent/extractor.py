@@ -600,3 +600,151 @@ async def extract_documents(
         claim_form=ExtractedClaimFormDocument(**clean_form),
         fallback_invocations_count=fallback_count,
     )
+
+
+async def validate_single_document(
+    image_bytes: bytes,
+    expected_type: str,
+) -> Dict[str, Any]:
+    """
+    Validates whether the uploaded file is a valid document matching the expected type (rc, dl, claim_form).
+    Rejects wrong document types, arbitrary photos, screenshots, or corrupted images with an actionable error.
+    """
+    exp = expected_type.lower().strip()
+    
+    # 1. Decode and check resolution
+    try:
+        validate_and_check_image_quality(image_bytes, f"upload_{exp}")
+    except InvalidImageContentError as e:
+        return {
+            "valid": False,
+            "expected_type": exp,
+            "detected_type": "INVALID_IMAGE",
+            "reason": str(e),
+        }
+
+    # 2. Run local OCR text analysis
+    raw_text, _ = _run_local_tesseract_ocr(image_bytes)
+    lower_text = raw_text.lower()
+
+    rc_keywords = ["registration", "chassis", "engine no", "engine number", "rto", "transport", "form 23", "parivahan", "maker", "model", "unladen", "mfg date", "certificate of registration", "vehicle class", "fuel"]
+    dl_keywords = ["driving licence", "driving license", "licence no", "license no", "dl no", "union of india", "valid till", "transport department", "lmv", "mcwg", "date of birth", "dob", "blood group", "authorisation to drive"]
+    form_keywords = ["claim", "intimation", "insurance", "incident", "accident", "damage", "driver", "signature", "surveyor", "policy no", "nature of loss", "fir", "loss date", "date of loss", "motor claim"]
+
+    has_plate_pattern = bool(re.search(r"\b[A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{4}\b", raw_text.replace(" ", "").upper()))
+
+    if exp in ("rc", "registration_certificate"):
+        rc_matches = sum(1 for kw in rc_keywords if kw in lower_text)
+        dl_matches = sum(1 for kw in dl_keywords if kw in lower_text)
+
+        if rc_matches >= 2 or (rc_matches >= 1 and has_plate_pattern):
+            return {
+                "valid": True,
+                "expected_type": "rc",
+                "detected_type": "RC",
+                "reason": "Document verified as a valid Vehicle Registration Certificate (RC).",
+            }
+        if dl_matches >= 2:
+            return {
+                "valid": False,
+                "expected_type": "rc",
+                "detected_type": "DL",
+                "reason": "This image appears to be a Driver's Licence (DL), not a Registration Certificate (RC). Please upload the vehicle's RC document.",
+            }
+
+    elif exp in ("dl", "driving_licence", "driving_license"):
+        dl_matches = sum(1 for kw in dl_keywords if kw in lower_text)
+        rc_matches = sum(1 for kw in rc_keywords if kw in lower_text)
+
+        if dl_matches >= 2:
+            return {
+                "valid": True,
+                "expected_type": "dl",
+                "detected_type": "DL",
+                "reason": "Document verified as a valid Driver's Licence (DL).",
+            }
+        if rc_matches >= 2:
+            return {
+                "valid": False,
+                "expected_type": "dl",
+                "detected_type": "RC",
+                "reason": "This image appears to be a Vehicle RC book, not a Driver's Licence. Please upload the Driver's Licence (DL).",
+            }
+
+    elif exp in ("claim_form", "form", "claim"):
+        form_matches = sum(1 for kw in form_keywords if kw in lower_text)
+        if form_matches >= 2:
+            return {
+                "valid": True,
+                "expected_type": "claim_form",
+                "detected_type": "CLAIM_FORM",
+                "reason": "Document verified as a valid Claim Intimation Form.",
+            }
+
+    # 3. If local OCR keywords are inconclusive, use Gemini 3.5 Flash-Lite fast document classifier
+    api_key = settings.active_api_key
+    if api_key and settings.VISION_PROVIDER == "gemini":
+        try:
+            model = settings.GEMINI_MODEL
+            url, headers = _get_gemini_endpoint_and_headers(model, api_key)
+            prompt = f"""
+You are an expert document classifier for Indian motor insurance.
+Examine this single uploaded document image.
+The user is attempting to upload it as: '{exp.upper()}'.
+
+Identify what document type this actually is from these categories:
+- 'RC' (Vehicle Registration Certificate / Smart Card / Form 23)
+- 'DL' (Driver's Driving Licence card)
+- 'CLAIM_FORM' (Motor Insurance Claim Intimation / incident report form, printed or handwritten)
+- 'OTHER' (Vehicle damage photo, selfie, random invoice, screenshot, landscape, or unrelated image)
+
+Respond in strictly valid JSON format:
+{{
+  "is_valid": true,
+  "detected_type": "RC",
+  "reason": "Concise 1-sentence user-facing explanation why this matches or does not match."
+}}
+"""
+            parts = [
+                {"text": prompt},
+                {"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(image_bytes).decode("utf-8")}},
+            ]
+            payload = {
+                "contents": [{"parts": parts}],
+                "generationConfig": {"response_mime_type": "application/json", "temperature": 0.0},
+            }
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.post(url, json=payload, headers=headers)
+                if res.status_code == 200:
+                    ai_raw = res.json()["candidates"][0]["content"]["parts"][0]["text"]
+                    cleaned = re.sub(r"^```json\s*|\s*```$", "", ai_raw.strip())
+                    parsed = json.loads(cleaned)
+                    is_valid = bool(parsed.get("is_valid", False))
+                    detected = parsed.get("detected_type", "UNKNOWN")
+                    reason = parsed.get("reason", "")
+                    if not reason:
+                        reason = f"Document verified as {detected}." if is_valid else f"The uploaded document does not appear to be an official {exp.upper()} (Detected: {detected}). Please re-upload the correct document."
+                    return {
+                        "valid": is_valid,
+                        "expected_type": exp,
+                        "detected_type": detected,
+                        "reason": reason,
+                    }
+        except Exception as e:
+            logger.warning(f"Fast AI document classifier failed: {e}")
+
+    # 4. Fallback if both OCR keywords and AI cannot confirm
+    if len(raw_text.strip()) < 10:
+        return {
+            "valid": False,
+            "expected_type": exp,
+            "detected_type": "UNREADABLE",
+            "reason": f"The document is unreadable or blurry. Please upload a clear photo/scan of the {exp.upper()}.",
+        }
+
+    return {
+        "valid": True,
+        "expected_type": exp,
+        "detected_type": exp.upper(),
+        "reason": f"Document accepted as {exp.upper()}.",
+    }

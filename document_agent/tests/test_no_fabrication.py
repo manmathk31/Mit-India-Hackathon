@@ -42,3 +42,37 @@ async def test_disambiguation_missing_key_does_not_inflate_confidence(monkeypatc
     
     assert res["confidence"] <= 0.40, f"Confidence inflated unexpectedly: {res['confidence']}"
     assert res["repaired_value"] == "RAJESH K"
+
+
+@pytest.mark.asyncio
+async def test_validate_single_document_corrupted_image():
+    """Corrupted bytes must be flagged with valid: False."""
+    from document_agent.extractor import validate_single_document
+    result = await validate_single_document(b"not an image", "rc")
+    assert result["valid"] is False
+    assert result["detected_type"] == "INVALID_IMAGE"
+
+
+@pytest.mark.asyncio
+async def test_validate_single_document_dl_uploaded_as_rc(monkeypatch):
+    """When a Driving Licence is uploaded into the RC slot, it must be detected and rejected."""
+    import io
+    from PIL import Image
+    from document_agent.extractor import validate_single_document
+    import document_agent.extractor as ext_mod
+
+    # Mock OCR returning DL text
+    monkeypatch.setattr(
+        ext_mod,
+        "_run_local_tesseract_ocr",
+        lambda img_bytes: ("UNION OF INDIA DRIVING LICENCE LICENCE NO DL-0420110023456 HOLDER LMV", 0.95)
+    )
+
+    img = Image.new("RGB", (400, 300), color=(255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG")
+
+    result = await validate_single_document(buf.getvalue(), "rc")
+    assert result["valid"] is False
+    assert result["detected_type"] == "DL"
+    assert "Driver's Licence" in result["reason"] or "DL" in result["reason"]
