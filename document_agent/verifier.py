@@ -475,7 +475,7 @@ def verify_documents(
         make=extracted.rc.make.strip(),
         model=extracted.rc.model.strip(),
         variant=extracted.rc.variant.strip(),
-        registration_year=int(extracted.rc.registration_year),
+        registration_year=int(extracted.rc.registration_year) if extracted.rc.registration_year is not None else None,
     )
 
     # Preserved free-text damage description verbatim

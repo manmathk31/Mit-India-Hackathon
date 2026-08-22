@@ -84,7 +84,8 @@ def calculate_overall_status(severities: List[str]) -> OverallDamageStatus:
         return "minor"
     return "none"
 
-
+# Concurrency limiter for Gemini Vision API calls to stay within rate limits
+_vision_semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_CALLS)
 
 
 
@@ -128,11 +129,15 @@ def _run_custom_model_on_photo(
 
             # Fast ONNX inference
             session = ort.InferenceSession(model_path, providers=["CPUExecutionProvider"])
-            # Dummy wrapper / preprocessing for standard 640x640 YOLO input
-            # If real model exists, ONNX outputs standard [x, y, w, h, score, class_id]
-            logger.info(f"Ran ONNX custom model inference on photo #{image_index+1}")
-            # Map detections to DamageDetection instances
-            return None  # Triggers fallback if ONNX pipeline needs specific custom weights mapping
+            # ONNX output decoding is not implemented for the current damage_yolo.onnx export.
+            # The model loads but we cannot decode raw output tensors without knowing
+            # the exact export config (anchors, class map, NMS thresholds).
+            # DO NOT log success — no detections were actually produced.
+            logger.warning(
+                f"ONNX model loaded for photo #{image_index+1} but output decoding is not implemented. "
+                f"Falling back to Gemini Vision API."
+            )
+            return None  # Honestly signal that custom model produced no results
         except ImportError:
             try:
                 from ultralytics import YOLO
@@ -277,14 +282,29 @@ Guidelines:
                         part = raw_det.get("part_name", "unknown")
                         mat = raw_det.get("material_type") or lookup_material_type(part)
                         bb = raw_det.get("bounding_box", {})
+                        sev = raw_det.get("severity")
+                        ror = raw_det.get("repair_or_replace")
+                        conf = raw_det.get("confidence")
+
+                        # Skip detections where Gemini didn't return required fields
+                        # rather than fabricating plausible defaults
+                        if not sev or sev not in ("minor", "moderate", "severe"):
+                            logger.warning(f"Skipping detection '{part}': missing/invalid severity '{sev}'")
+                            continue
+                        if not ror or ror not in ("repair", "replace"):
+                            logger.warning(f"Skipping detection '{part}': missing/invalid repair_or_replace '{ror}'")
+                            continue
+                        if conf is None:
+                            logger.warning(f"Detection '{part}' missing confidence score, defaulting to 0.5")
+                            conf = 0.5  # Honest low default, not 0.9
                         
                         results.append(
                             DamageDetection(
                                 part_name=part,
                                 material_type=mat,
-                                severity=raw_det.get("severity", "moderate"),
-                                repair_or_replace=raw_det.get("repair_or_replace", "repair"),
-                                confidence=float(raw_det.get("confidence", 0.90)),
+                                severity=sev,
+                                repair_or_replace=ror,
+                                confidence=float(conf),
                                 bounding_box=BoundingBox(
                                     x=max(0, int(bb.get("x", 0))),
                                     y=max(0, int(bb.get("y", 0))),
@@ -347,20 +367,16 @@ async def extract_damage_assessment(
             logger.info(f"Photo #{idx+1}: Custom Model unavailable/no detections. Queuing Gemini Vision API fallback.")
             gemini_fallback_tasks.append((idx, photo_bytes, w, h))
 
-    # Step B: Run ALL Gemini fallback calls in PARALLEL (with semaphore limit)
-    # This reduces latency from N*25s to just 25s while protecting the 15 RPM ceiling.
+    # Step B: Run ALL Gemini fallback calls in PARALLEL (not sequentially)
+    # This reduces latency from N*25s to just 25s regardless of photo count.
     if gemini_fallback_tasks:
-        logger.info(f"Running {len(gemini_fallback_tasks)} Gemini Vision fallback calls in parallel (concurrency limit={settings.MAX_CONCURRENT_CALLS})")
+        logger.info(f"Running {len(gemini_fallback_tasks)} Gemini Vision calls in parallel")
         async def _safe_gemini(idx: int, photo_bytes: bytes, w: int, h: int) -> List[DamageDetection]:
-            logger.info(f"Photo #{idx+1}: Invoking Gemini Vision fallback ({w}x{h}px)...")
-            async with _vision_semaphore:
-                try:
-                    dets = await _analyze_photo_with_gemini(photo_bytes, idx, w, h)
-                    logger.info(f"Photo #{idx+1}: Gemini Vision fallback completed with {len(dets)} detections")
-                    return dets
-                except Exception as e:
-                    logger.warning(f"Photo #{idx+1}: Gemini Vision fallback failed: {str(e)}")
-                    return []
+            try:
+                return await _analyze_photo_with_gemini(photo_bytes, idx, w, h)
+            except Exception as e:
+                logger.warning(f"Gemini Fallback failed for photo #{idx+1}: {str(e)}")
+                return []
 
         parallel_results = await asyncio.gather(
             *[_safe_gemini(idx, pb, w, h) for idx, pb, w, h in gemini_fallback_tasks]

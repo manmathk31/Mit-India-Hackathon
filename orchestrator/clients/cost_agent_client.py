@@ -77,11 +77,26 @@ async def call_cost_agent(
     ]
 
     # 3. Build exact payload for CostEstimateRequest.java
+    # CRITICAL: Never fabricate vehicle identity. If make/model/year are unknown,
+    # we cannot produce a valid cost estimate — return insufficient_data instead.
+    make = vehicle_meta.get("make", "UNKNOWN")
+    model = vehicle_meta.get("model", "UNKNOWN")
+    variant = vehicle_meta.get("variant", "UNKNOWN")
+    reg_year = vehicle_meta.get("registration_year")
+
+    if make == "UNKNOWN" or model == "UNKNOWN" or not reg_year:
+        logger.warning(
+            f"Cannot call Cost Agent for claim '{claim_id or 'UNKNOWN'}': "
+            f"vehicle identity incomplete (make={make}, model={model}, year={reg_year}). "
+            f"Returning insufficient_data status."
+        )
+        return CostReconciliation(status="insufficient_data")
+
     payload = {
-        "vehicleMake": vehicle_meta.get("make", "Maruti Suzuki"),
-        "vehicleModel": vehicle_meta.get("model", "Swift"),
-        "variant": vehicle_meta.get("variant", "VXI"),
-        "registrationYear": int(vehicle_meta.get("registration_year", 2021)),
+        "vehicleMake": make,
+        "vehicleModel": model,
+        "variant": variant if variant != "UNKNOWN" else "",
+        "registrationYear": int(reg_year),
         "damageLocation": "Exterior Vehicle Panels",
         "damageSeverity": overall_severity,
         "city": region.split(",")[0].strip() if region else "Pune",

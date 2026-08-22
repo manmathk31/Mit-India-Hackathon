@@ -44,11 +44,14 @@ async def startup_event():
 @app.get("/health", tags=["System"])
 async def health_check():
     """Liveness probe for orchestrator and load balancers."""
+    api_key = settings.active_api_key
     return {
         "status": "ok",
         "service": settings.SERVICE_NAME,
         "version": settings.SERVICE_VERSION,
         "engine": settings.DETECTION_ENGINE,
+        "gemini_key_configured": bool(api_key),
+        "gemini_key_missing": not bool(api_key),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 

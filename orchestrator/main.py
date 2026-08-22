@@ -93,16 +93,42 @@ async def startup_event():
 
 @app.get("/health", tags=["System"])
 async def health_check():
-    """Liveness probe reporting connected microservices and database."""
+    """Liveness probe reporting connected microservices, API key status, and database."""
+    # Check Gemini API key availability
+    gemini_key = settings.GEMINI_API_KEY or ""
+    
+    # Probe sub-services for connectivity (non-blocking, best-effort)
+    import httpx
+    sub_service_status = {}
+    for name, url in [
+        ("document_agent", settings.DOCUMENT_AGENT_URL),
+        ("image_agent", settings.IMAGE_AGENT_URL),
+    ]:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{url.rstrip('/')}/health")
+                sub_service_status[name] = "reachable" if resp.status_code == 200 else f"unhealthy (HTTP {resp.status_code})"
+        except Exception as e:
+            sub_service_status[name] = f"unreachable ({type(e).__name__})"
+
+    # Probe cost agent (different health path)
+    try:
+        cost_base = settings.COST_AGENT_URL.rsplit('/api/cost/estimate', 1)[0]
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{cost_base}/api/health")
+            sub_service_status["cost_agent"] = "reachable" if resp.status_code == 200 else f"unhealthy (HTTP {resp.status_code})"
+    except Exception as e:
+        sub_service_status["cost_agent"] = f"unreachable ({type(e).__name__})"
+
+    all_reachable = all(v == "reachable" for v in sub_service_status.values())
+
     return {
-        "status": "ok",
+        "status": "ok" if all_reachable else "degraded",
         "service": settings.SERVICE_NAME,
         "version": settings.SERVICE_VERSION,
-        "connected_services": {
-            "document_agent": settings.DOCUMENT_AGENT_URL,
-            "image_agent": settings.IMAGE_AGENT_URL,
-            "cost_agent": settings.COST_AGENT_URL,
-        },
+        "gemini_key_configured": bool(gemini_key),
+        "gemini_key_missing": not bool(gemini_key),
+        "connected_services": sub_service_status,
         "database": "connected" if settings.DATABASE_URL else "local_sqlite",
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -182,60 +208,28 @@ async def process_claim(
         )
 
     # 3. Concurrent Execution of Document Agent & Image Agent
-    doc_task = call_document_agent(
-        rc_bytes=rc_bytes,
-        dl_bytes=dl_bytes,
-        claim_form_bytes=claim_form_bytes,
-        policy_record=policy.model_dump(),
-        claim_id=tracking_claim_id,
-    )
-    img_task = call_image_agent(
-        damage_photos=photo_buffers,
-        claim_id=tracking_claim_id,
-    )
-
-    results = await asyncio.gather(doc_task, img_task, return_exceptions=True)
-    doc_result, img_result = results[0], results[1]
-
-    # If image agent failed initially, retry once with a fresh short timeout (30s)
-    if isinstance(img_result, Exception):
-        logger.warning(
-            f"Image agent initial call failed for claim '{tracking_claim_id}': {str(img_result)}. "
-            f"Retrying once with fresh 30s timeout..."
+    try:
+        doc_task = call_document_agent(
+            rc_bytes=rc_bytes,
+            dl_bytes=dl_bytes,
+            claim_form_bytes=claim_form_bytes,
+            policy_record=policy.model_dump(),
+            claim_id=tracking_claim_id,
         )
-        try:
-            img_result = await call_image_agent(
-                damage_photos=photo_buffers,
-                claim_id=tracking_claim_id,
-                timeout_seconds=30.0,
-            )
-            logger.info(f"Image agent retry succeeded for claim '{tracking_claim_id}'")
-        except Exception as retry_err:
-            logger.error(f"Image agent retry also failed for claim '{tracking_claim_id}': {str(retry_err)}")
-            img_result = retry_err
+        img_task = call_image_agent(
+            damage_photos=photo_buffers,
+            claim_id=tracking_claim_id,
+        )
 
-    # Handle agent failures independently with precise stage labeling
-    if isinstance(doc_result, Exception):
-        logger.error(f"Document Agent failed for claim '{tracking_claim_id}': {str(doc_result)}")
+        doc_result, img_result = await asyncio.gather(doc_task, img_task)
+
+    except Exception as e:
+        logger.error(f"Upstream agent execution failed for claim '{tracking_claim_id}': {str(e)}", exc_info=True)
         return JSONResponse(
             status_code=status.HTTP_502_BAD_GATEWAY,
             content=ErrorDetail(
-                error="document_agent_failed",
-                stage="document_agent",
-                detail=f"Document verification agent failed: {str(doc_result)}",
-                claim_id=tracking_claim_id,
-                timestamp=datetime.now(timezone.utc).isoformat(),
-            ).model_dump(),
-        )
-
-    if isinstance(img_result, Exception):
-        logger.error(f"Image Agent failed for claim '{tracking_claim_id}': {str(img_result)}")
-        return JSONResponse(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            content=ErrorDetail(
-                error="image_agent_failed",
-                stage="image_agent",
-                detail=f"Damage assessment image agent failed: {str(img_result)}",
+                error="agent_orchestration_failed",
+                detail=f"Sub-agent service call failed: {str(e)}",
                 claim_id=tracking_claim_id,
                 timestamp=datetime.now(timezone.utc).isoformat(),
             ).model_dump(),
@@ -245,16 +239,20 @@ async def process_claim(
     extracted_vehicle_meta = doc_result.get("extracted_vehicle_meta", {})
 
     detections = img_result.get("detections", [])
-    damage_list_for_cost = [
-        {
-            "part_name": d.get("part_name", ""),
-            "material_type": d.get("material_type", "metal"),
-            "severity": d.get("severity", "moderate"),
+    damage_list_for_cost = []
+    for d in detections:
+        # Use actual detection values — do NOT fabricate defaults for missing data.
+        # If a detection came from Gemini/YOLO, these fields should be present.
+        part_name = d.get("part_name", "")
+        if not part_name:
+            continue  # Skip empty detections
+        damage_list_for_cost.append({
+            "part_name": part_name,
+            "material_type": d.get("material_type", "unknown"),
+            "severity": d.get("severity", "minor"),  # Safe: this detection exists
             "repair_or_replace": d.get("repair_or_replace", "repair"),
-            "confidence": d.get("confidence", 0.90),
-        }
-        for d in detections
-    ]
+            "confidence": d.get("confidence", 0.5),  # Honest low default for missing conf
+        })
 
     # 5. Call Cost Agent (Spring Boot)
     try:
@@ -295,25 +293,27 @@ async def process_claim(
     }
 
     primary_location = "Front Bumper & Lower Grille" if any("bumper" in d.get("part_name", "") for d in detections) else "Body Structure"
+    # Use actual damage status from image agent — default to "none" (unknown), NOT "moderate"
+    actual_damage_status = img_result.get("overall_damage_status", "none")
     formatted_damage_assessment = {
-        "severity": img_result.get("overall_damage_status", "moderate"),
-        "severity_label": img_result.get("overall_damage_status", "moderate").capitalize(),
+        "severity": actual_damage_status,
+        "severity_label": actual_damage_status.capitalize() if actual_damage_status else "Unknown",
         "location": "front_impact" if "Front" in primary_location else "side_impact",
         "location_label": primary_location,
         "vehicle_tier": "economy",
-        "vehicle_tier_label": f"{extracted_vehicle_meta.get('make', 'Standard')} {extracted_vehicle_meta.get('model', 'Sedan')}",
+        "vehicle_tier_label": f"{extracted_vehicle_meta.get('make', 'UNKNOWN')} {extracted_vehicle_meta.get('model', 'UNKNOWN')}",
         "detected_parts": [
             {
                 "part": d.get("part_name", "").title(),
-                "type": f"{d.get('severity', 'moderate').capitalize()} Damage",
+                "type": f"{d.get('severity', 'unknown').capitalize()} Damage",
                 "action": "Replace & Paint" if d.get("repair_or_replace") == "replace" else "Repair & Refit",
-                "confidence": f"{int(d.get('confidence', 0.9) * 100)}%",
-                "material_type": d.get("material_type", "metal"),
+                "confidence": f"{int(d.get('confidence', 0.5) * 100)}%",
+                "material_type": d.get("material_type", "unknown"),
             }
             for d in detections
         ],
         "photos_analyzed": img_result.get("photos_analyzed", len(photo_buffers)),
-        "no_damage_detected": img_result.get("no_damage_detected", False),
+        "no_damage_detected": img_result.get("no_damage_detected", len(detections) == 0),
     }
 
     decision_status, status_label, status_desc, decision_trail = evaluate_claim_decision(
@@ -334,7 +334,7 @@ async def process_claim(
             status=decision_status,
             status_label=status_label,
             status_description=status_desc,
-            overall_damage_severity=img_result.get("overall_damage_status", "moderate"),
+            overall_damage_severity=actual_damage_status,
             estimated_cost_low=cost_result.final_low,
             estimated_cost_high=cost_result.final_high,
             recommended_payout=cost_result.final_low,  # Store low-end as the conservative payout float
@@ -356,10 +356,10 @@ async def process_claim(
             part_row = ClaimDetectedPart(
                 claim_id=claim_row.id,
                 part_name=d.get("part_name", ""),
-                material_type=d.get("material_type", "metal"),
-                severity=d.get("severity", "moderate"),
-                repair_or_replace=d.get("repair_or_replace", "repair"),
-                confidence=float(d.get("confidence", 0.9)),
+                material_type=d.get("material_type", "unknown"),
+                severity=d.get("severity", "unknown"),
+                repair_or_replace=d.get("repair_or_replace", "unknown"),
+                confidence=float(d.get("confidence", 0.0)),
                 bounding_box=d.get("bounding_box", {}),
             )
             db.add(part_row)
@@ -406,12 +406,12 @@ async def process_claim(
         status_label=status_label,
         status_description=status_desc,
         vehicle={
-            "make": extracted_vehicle_meta.get("make", "Maruti Suzuki"),
-            "model": extracted_vehicle_meta.get("model", "Swift"),
-            "variant": extracted_vehicle_meta.get("variant", "VXI"),
-            "year": extracted_vehicle_meta.get("registration_year", 2021),
+            "make": extracted_vehicle_meta.get("make", "UNKNOWN"),
+            "model": extracted_vehicle_meta.get("model", "UNKNOWN"),
+            "variant": extracted_vehicle_meta.get("variant", "UNKNOWN"),
+            "year": extracted_vehicle_meta.get("registration_year"),  # None if not extracted
             "registration": policy.rc_number,
-            "fuel": "Petrol",
+            "fuel": "UNKNOWN",
         },
         policy=policy_dict,
         document_check=doc_result,
@@ -459,11 +459,11 @@ async def list_all_claims(db: AsyncSession = Depends(get_db)):
             "status_label": c.status_label or c.status.replace("_", " ").title(),
             "status_description": c.status_description or "Autonomous claim processing complete.",
             "vehicle": {
-                "make": dmg_data.get("vehicle_tier_label", "Unknown").split(" ")[0] if dmg_data.get("vehicle_tier_label") else "Unknown",
-                "model": " ".join(dmg_data.get("vehicle_tier_label", "").split(" ")[1:]) if dmg_data.get("vehicle_tier_label") else "",
-                "year": doc_data.get("extracted_vehicle_meta", {}).get("registration_year", "Unknown") if isinstance(doc_data, dict) else "Unknown",
+                "make": doc_data.get("extracted_vehicle_meta", {}).get("make", "UNKNOWN") if isinstance(doc_data, dict) else "UNKNOWN",
+                "model": doc_data.get("extracted_vehicle_meta", {}).get("model", "UNKNOWN") if isinstance(doc_data, dict) else "UNKNOWN",
+                "year": doc_data.get("extracted_vehicle_meta", {}).get("registration_year") if isinstance(doc_data, dict) else None,
                 "registration": doc_data.get("extracted_plate_number") if isinstance(doc_data, dict) and doc_data.get("extracted_plate_number") else "Unreadable",
-                "fuel": "N/A"
+                "fuel": "UNKNOWN"
             },
             "policy": {
                 "number": "N/A",

@@ -34,10 +34,10 @@ class FieldVerificationResult(BaseModel):
 
 class ExtractedVehicleMeta(BaseModel):
     """Vehicle metadata extracted from RC used for downstream Cost/Depreciation Agent."""
-    make: str = Field(..., description="Vehicle manufacturer, e.g. 'Maruti Suzuki', 'Hyundai'")
-    model: str = Field(..., description="Vehicle model, e.g. 'Swift Dzire', 'Creta'")
-    variant: str = Field(..., description="Vehicle variant/trim, e.g. 'VXI', 'SX (O)'")
-    registration_year: int = Field(..., description="Year of vehicle registration, e.g. 2021")
+    make: str = Field(..., description="Vehicle manufacturer, e.g. 'Maruti Suzuki', 'Hyundai' or 'UNKNOWN'")
+    model: str = Field(..., description="Vehicle model, e.g. 'Swift Dzire', 'Creta' or 'UNKNOWN'")
+    variant: str = Field(..., description="Vehicle variant/trim, e.g. 'VXI', 'SX (O)' or 'UNKNOWN'")
+    registration_year: Optional[int] = Field(None, description="Year of vehicle registration or None if unknown")
 
 
 class DocumentVerificationResponse(BaseModel):
@@ -62,7 +62,7 @@ class ExtractedRCDocument(BaseModel):
     make: str = "Unknown Make"
     model: str = "Unknown Model"
     variant: str = "Standard"
-    registration_year: int = 2021
+    registration_year: Optional[int] = None  # None when year cannot be extracted
     plate_number: str = "Unreadable / Missing"
     document_type_detected: str = "RC"
     confidence: float = 0.10

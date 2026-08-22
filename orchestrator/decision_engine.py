@@ -33,7 +33,7 @@ def evaluate_claim_decision(
     # --------------------------------------------------------------------------
     # Step 1: Validation Gate
     # --------------------------------------------------------------------------
-    pol_status = policy.get("status", "Active")
+    pol_status = policy.get("status", "Unknown")  # Never default to "Active" — unknown policy status must be flagged
     if pol_status != "Active":
         decision_trail.append(
             DecisionTrailEntry(
@@ -64,8 +64,8 @@ def evaluate_claim_decision(
     # --------------------------------------------------------------------------
     # Step 2: Document Verification Evaluation
     # --------------------------------------------------------------------------
-    doc_status = document_check.get("overall_status", "warning")
-    doc_conf = document_check.get("confidence_score", 0.95)
+    doc_status = document_check.get("overall_status", "warning")  # Unknown status treated as warning
+    doc_conf = document_check.get("confidence_score", 0.0)  # Unknown confidence — never assume 0.95
     doc_conf_pct = f"{doc_conf * 100:.1f}%" if doc_conf <= 1.0 else f"{doc_conf:.1f}%"
 
     if doc_status == "verified":
@@ -132,6 +132,16 @@ def evaluate_claim_decision(
                 step="Cost Reconciliation",
                 outcome="Cost Engine Unreachable",
                 detail="The cost calculation service is currently unavailable. Manual estimation required.",
+                status="flagged",
+                timestamp=format_ts(18),
+            )
+        )
+    elif cost_estimate.status == "insufficient_data":
+        decision_trail.append(
+            DecisionTrailEntry(
+                step="Cost Reconciliation",
+                outcome="Vehicle Identity Unknown",
+                detail="Vehicle make/model/year could not be extracted from documents. Cost estimation cannot proceed without vehicle identity.",
                 status="flagged",
                 timestamp=format_ts(18),
             )
@@ -242,10 +252,12 @@ def evaluate_claim_decision(
     # --------------------------------------------------------------------------
     # Step 8: Fraud & Document Failure Hard Stops
     # --------------------------------------------------------------------------
-    if failed_frauds or doc_status == "warning" or cost_estimate.status == "unavailable":
+    if failed_frauds or doc_status == "warning" or cost_estimate.status in ("unavailable", "insufficient_data"):
         reason = "document mismatch or failed fraud check"
         if cost_estimate.status == "unavailable":
             reason = "cost engine unreachable"
+        elif cost_estimate.status == "insufficient_data":
+            reason = "vehicle identity unknown — cannot estimate repair cost"
         
         decision_trail.append(
             DecisionTrailEntry(

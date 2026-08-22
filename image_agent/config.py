@@ -25,8 +25,8 @@ class Settings(BaseSettings):
         "image/bmp",
     ]
 
-    # Detection Engine: "custom" (Local Custom YOLO/ONNX model) with "gemini" as fallback
-    DETECTION_ENGINE: Literal["custom", "gemini"] = "custom"
+    # Detection Engine: "gemini" (Default — primary working engine) or "custom" (ONNX, requires trained model with known output format)
+    DETECTION_ENGINE: Literal["custom", "gemini"] = "gemini"
     CUSTOM_MODEL_PATH: str = "models/damage_yolo.onnx"
     CUSTOM_MODEL_CONFIDENCE_THRESHOLD: float = 0.65  # If custom model detection confidence < 0.65, triggers Gemini
 

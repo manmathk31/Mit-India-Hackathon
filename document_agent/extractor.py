@@ -143,17 +143,75 @@ def _parse_rc_locally(raw_text: str, overall_conf: float) -> Dict[str, Any]:
 
     # Registration Year
     year_match = re.search(r"\b(20[0-2][0-9]|199[0-9])\b", text_upper)
-    reg_year = int(year_match.group(1)) if year_match else 2021
+    reg_year = int(year_match.group(1)) if year_match else None  # Never fabricate a year
 
     # Owner Name (Look around Name/Owner tokens)
     owner_match = re.search(r"(?:NAME|OWNER|S\/O|D\/O|W\/O)[:\s]+([A-Z\s]{4,30})", text_upper)
     owner_name = owner_match.group(1).strip() if owner_match else ""
     owner_conf = (overall_conf * 0.9) if owner_name else 0.2
 
-    # Make & Model heuristic
-    make = "Maruti Suzuki" if "MARUTI" in text_upper or "SUZUKI" in text_upper else ("Hyundai" if "HYUNDAI" in text_upper else "Tata Motors")
-    model = "Swift Dzire" if "SWIFT" in text_upper or "DZIRE" in text_upper else "Passenger Car"
-    variant = "VXI" if "VXI" in text_upper else "Standard"
+    # Make & Model — extract ONLY if the keyword is actually found in OCR text.
+    # Never fabricate a specific brand/model when OCR can't find one.
+    make = "UNKNOWN"
+    if "MARUTI" in text_upper or "SUZUKI" in text_upper:
+        make = "Maruti Suzuki"
+    elif "HYUNDAI" in text_upper:
+        make = "Hyundai"
+    elif "TATA" in text_upper:
+        make = "Tata Motors"
+    elif "MAHINDRA" in text_upper:
+        make = "Mahindra"
+    elif "HONDA" in text_upper:
+        make = "Honda"
+    elif "TOYOTA" in text_upper:
+        make = "Toyota"
+    elif "KIA" in text_upper:
+        make = "Kia"
+
+    model = "UNKNOWN"
+    if "SWIFT" in text_upper:
+        model = "Swift"
+    elif "DZIRE" in text_upper:
+        model = "Dzire"
+    elif "CRETA" in text_upper:
+        model = "Creta"
+    elif "NEXON" in text_upper:
+        model = "Nexon"
+    elif "BALENO" in text_upper:
+        model = "Baleno"
+    elif "I20" in text_upper or "I 20" in text_upper:
+        model = "i20"
+    elif "CITY" in text_upper:
+        model = "City"
+    elif "SELTOS" in text_upper:
+        model = "Seltos"
+    # Add more models as needed — but never guess
+
+    variant = "UNKNOWN"
+    if "VXI" in text_upper:
+        variant = "VXI"
+    elif "ZXI" in text_upper:
+        variant = "ZXI"
+    elif "LXI" in text_upper:
+        variant = "LXI"
+    elif "VDI" in text_upper:
+        variant = "VDI"
+    elif "ZDI" in text_upper:
+        variant = "ZDI"
+
+    # Determine if vehicle identity was actually extracted vs unknown
+    vehicle_identified = make != "UNKNOWN" and model != "UNKNOWN"
+    doc_type = "RC" if (rc_number or chassis_number) else "UNVERIFIED"
+    if not vehicle_identified:
+        doc_type = "UNVERIFIED" if not rc_number else doc_type
+
+    # Confidence reflects actual extraction quality
+    if rc_number and chassis_number and vehicle_identified:
+        doc_confidence = overall_conf
+    elif rc_number or chassis_number:
+        doc_confidence = min(overall_conf, 0.45)  # Partial extraction
+    else:
+        doc_confidence = 0.2  # Basically nothing extracted
 
     return {
         "owner_name": owner_name,
@@ -168,8 +226,8 @@ def _parse_rc_locally(raw_text: str, overall_conf: float) -> Dict[str, Any]:
         "variant": variant,
         "registration_year": reg_year,
         "plate_number": rc_number,
-        "document_type_detected": "RC",
-        "confidence": overall_conf if rc_number and chassis_number else 0.5,
+        "document_type_detected": doc_type,
+        "confidence": doc_confidence,
     }
 
 
@@ -282,11 +340,15 @@ async def _run_selective_llm_disambiguation(
 
     api_key = settings.active_api_key
     if not api_key:
-        # If no external API key configured, gracefully retain local reading
+        # API key not configured — return honest low confidence, never inflate
+        logger.warning(
+            f"GEMINI_API_KEY not configured. Cannot disambiguate '{field_name}'. "
+            f"Returning local OCR reading with original confidence {initial_confidence:.2f}."
+        )
         return {
             "field_name": field_name,
-            "repaired_value": initial_extracted_value or context_hint or "UNREADABLE",
-            "confidence": 0.88 if context_hint else max(0.4, initial_confidence),
+            "repaired_value": initial_extracted_value or "UNREADABLE",
+            "confidence": max(0.2, initial_confidence),  # Never inflate — no API call was made
         }
 
     disambiguate_prompt = f"""
@@ -343,39 +405,6 @@ Return strictly valid JSON with this format:
                             data = res.json()
                             text = data["candidates"][0]["content"]["parts"][0]["text"]
                             return json.loads(re.sub(r"^```json\s*|\s*```$", "", text.strip()))
-                else:
-                    payload = {
-                        "model": settings.OPENAI_MODEL,
-                        "messages": [
-                            {
-                                "role": "user",
-                                "content": [
-                                    {"type": "text", "text": disambiguate_prompt},
-                                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_img}"}},
-                                ],
-                            }
-                        ],
-                        "response_format": {"type": "json_object"},
-                        "temperature": 0.0,
-                    }
-                    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-                    async with httpx.AsyncClient(timeout=timeout) as client:
-                        res = await client.post(settings.OPENAI_API_URL, json=payload, headers=headers)
-                        
-                        if res.status_code == 429:
-                            if attempt < settings.MAX_RETRIES:
-                                backoff_seconds = (settings.RATE_LIMIT_BACKOFF_FACTOR ** attempt) + 1.0
-                                logger.warning(f"OpenAI 429 Rate Limit for '{field_name}'. Retrying in {backoff_seconds:.1f}s")
-                                await asyncio.sleep(backoff_seconds)
-                                continue
-                            else:
-                                break
-
-                        if res.status_code == 200:
-                            data = res.json()
-                            text = data["choices"][0]["message"]["content"]
-                            return json.loads(re.sub(r"^```json\s*|\s*```$", "", text.strip()))
-
             except httpx.TimeoutException:
                 # For timeouts (not rate limits), only retry once to prevent burning
                 # excessive time on unrelated/stock images that Gemini can't process.
@@ -388,11 +417,16 @@ Return strictly valid JSON with this format:
                 logger.warning(f"Selective LLM error for '{field_name}': {str(e)}. Gracefully falling back.")
                 break
 
-    # Graceful degradation: If rate-limited or failed, app NEVER crashes
+    # Graceful degradation: If rate-limited or failed, app NEVER crashes.
+    # But we NEVER inflate confidence — no LLM verification actually happened.
+    logger.warning(
+        f"LLM disambiguation failed for '{field_name}'. Returning local OCR reading "
+        f"with original confidence {initial_confidence:.2f} (not inflated)."
+    )
     return {
         "field_name": field_name,
-        "repaired_value": initial_extracted_value or context_hint or "UNREADABLE",
-        "confidence": 0.85 if context_hint else max(0.4, initial_confidence),
+        "repaired_value": initial_extracted_value or "UNREADABLE",
+        "confidence": max(0.2, initial_confidence),  # Never inflate — LLM call failed
     }
 
 
@@ -430,7 +464,7 @@ Return strictly valid JSON matching this structure:
     "rc_number": "string", "rc_number_confidence": 0.95,
     "chassis_number": "string", "chassis_number_confidence": 0.95,
     "engine_number": "string", "make": "string", "model": "string", "variant": "string",
-    "registration_year": 2021, "plate_number": "string", "document_type_detected": "RC", "confidence": 0.95
+    "registration_year": null, "plate_number": "string", "document_type_detected": "RC", "confidence": 0.95
   },
   "dl": {
     "dl_number": "string", "dl_number_confidence": 0.95,
@@ -469,30 +503,9 @@ Return strictly valid JSON matching this structure:
                 logger.warning(f"Could not parse Vision API JSON: {parse_err}")
                 return {"rc": {}, "dl": {}, "claim_form": {}}
     else:
-        # OpenAI vision
-        payload = {
-            "model": settings.OPENAI_MODEL,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(rc_bytes).decode('utf-8')}"}},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(dl_bytes).decode('utf-8')}"}},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64.b64encode(claim_form_bytes).decode('utf-8')}"}},
-                    ],
-                }
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.0,
-        }
-        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-        async with httpx.AsyncClient(timeout=settings.REQUEST_TIMEOUT_SECONDS) as client:
-            res = await client.post(settings.OPENAI_API_URL, json=payload, headers=headers)
-            if res.status_code != 200:
-                raise ExtractionAPIError(f"OpenAI API returned HTTP {res.status_code}: {res.text}")
-            content = res.json()["choices"][0]["message"]["content"]
-            return json.loads(re.sub(r"^```json\s*|\s*```$", "", content.strip()))
+        raise ExtractionAPIError(
+            f"Unsupported VISION_PROVIDER: '{settings.VISION_PROVIDER}'. Only 'gemini' is supported."
+        )
 
 
 # ------------------------------------------------------------------------------

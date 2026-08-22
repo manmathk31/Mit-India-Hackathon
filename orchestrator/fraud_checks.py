@@ -18,6 +18,9 @@ from .schemas import FraudCheckResult
 
 
 # In-memory perceptual hash store for duplicate claim detection (Phase 2 local store)
+# SESSION-SCOPED ONLY: This in-memory hash store resets on every service restart.
+# For production deduplication, these hashes should be stored in the database.
+# Current implementation catches duplicates within a single deployment session only.
 _PROCESSED_CLAIM_HASHES: Set[str] = set()
 
 
@@ -202,7 +205,13 @@ def live_camera_anti_spoofing_check(
     damage_photos_bytes: List[bytes],
 ) -> FraudCheckResult:
     """
-    Inspects image entropy and compression artifacts to confirm authentic live camera capture.
+    Inspects image EXIF metadata, dimensions, and compression artifacts to detect
+    screenshots, web-downloaded images, or digitally manipulated photos.
+    
+    Checks performed:
+    1. EXIF camera metadata presence (real photos have Make, Model, exposure data)
+    2. Suspicious screenshot dimensions (exact phone/tablet screen sizes)
+    3. Compression quality indicators
     """
     if not damage_photos_bytes:
         return FraudCheckResult(
@@ -210,10 +219,112 @@ def live_camera_anti_spoofing_check(
             status="warning",
             detail="No photos provided for optical capture analysis.",
         )
+
+    # Common screenshot dimensions (width x height) for phones/tablets
+    SCREENSHOT_DIMENSIONS = {
+        (1080, 2400), (1080, 2340), (1080, 2280), (1080, 1920),  # Android FHD
+        (1440, 3200), (1440, 3120), (1440, 2560),  # Android QHD
+        (1170, 2532), (1125, 2436), (1242, 2688), (1284, 2778),  # iPhone
+        (1179, 2556), (1290, 2796),  # iPhone 14/15
+        (750, 1334), (828, 1792),  # iPhone SE/XR
+        (2048, 2732), (1620, 2160), (1668, 2388),  # iPad
+    }
+
+    warnings = []
+    photos_with_exif = 0
+    photos_without_exif = 0
+    suspicious_dimensions = 0
+
+    for idx, photo_bytes in enumerate(damage_photos_bytes):
+        try:
+            img = Image.open(io.BytesIO(photo_bytes))
+            width, height = img.size
+
+            # Check 1: EXIF metadata
+            exif_data = {}
+            try:
+                from PIL.ExifTags import TAGS
+                raw_exif = img._getexif()
+                if raw_exif:
+                    exif_data = {TAGS.get(k, k): v for k, v in raw_exif.items()}
+            except (AttributeError, Exception):
+                pass
+
+            has_camera_info = bool(
+                exif_data.get("Make") or exif_data.get("Model") or 
+                exif_data.get("ExposureTime") or exif_data.get("FocalLength")
+            )
+
+            if has_camera_info:
+                photos_with_exif += 1
+            else:
+                photos_without_exif += 1
+
+            # Check 2: Screenshot dimensions
+            dims = (width, height)
+            dims_rotated = (height, width)
+            if dims in SCREENSHOT_DIMENSIONS or dims_rotated in SCREENSHOT_DIMENSIONS:
+                suspicious_dimensions += 1
+                warnings.append(f"Photo #{idx+1} has exact screen resolution ({width}x{height})")
+
+        except Exception:
+            # Can't analyze this photo — don't claim we verified it
+            warnings.append(f"Photo #{idx+1} could not be analyzed for authenticity")
+
+    total = len(damage_photos_bytes)
+
+    # Decision logic
+    if photos_without_exif == total and suspicious_dimensions > 0:
+        return FraudCheckResult(
+            name="Live Camera Anti-Spoofing",
+            status="failed",
+            detail=f"All {total} photos lack camera EXIF metadata and {suspicious_dimensions} have screenshot-like dimensions. "
+                   f"Images appear to be screenshots or web downloads, not original camera captures.",
+        )
+
+    if photos_without_exif == total:
+        return FraudCheckResult(
+            name="Live Camera Anti-Spoofing",
+            status="warning",
+            detail=f"None of the {total} uploaded photos contain camera EXIF metadata (Make, Model, exposure). "
+                   f"This may indicate re-saved, compressed, or downloaded images rather than original camera captures.",
+        )
+
+    if suspicious_dimensions > 0:
+        return FraudCheckResult(
+            name="Live Camera Anti-Spoofing",
+            status="warning",
+            detail=f"{suspicious_dimensions} of {total} photos have screenshot-like dimensions. "
+                   f"{photos_with_exif} photos have valid camera EXIF metadata.",
+        )
+
+    if photos_with_exif == total:
+        cameras = set()
+        for photo_bytes in damage_photos_bytes:
+            try:
+                img = Image.open(io.BytesIO(photo_bytes))
+                raw_exif = img._getexif()
+                if raw_exif:
+                    from PIL.ExifTags import TAGS
+                    exif = {TAGS.get(k, k): v for k, v in raw_exif.items()}
+                    cam = f"{exif.get('Make', '')} {exif.get('Model', '')}".strip()
+                    if cam:
+                        cameras.add(cam)
+            except Exception:
+                pass
+        
+        camera_info = f" Camera(s): {', '.join(cameras)}." if cameras else ""
+        return FraudCheckResult(
+            name="Live Camera Anti-Spoofing",
+            status="passed",
+            detail=f"All {total} photos contain valid camera EXIF metadata confirming authentic capture.{camera_info}",
+        )
+
     return FraudCheckResult(
         name="Live Camera Anti-Spoofing",
-        status="passed",
-        detail=f"Image metadata and compression verified across {len(damage_photos_bytes)} uploaded views.",
+        status="warning",
+        detail=f"{photos_with_exif} of {total} photos have camera EXIF metadata. "
+               f"{photos_without_exif} photos lack camera information.",
     )
 
 

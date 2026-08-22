@@ -28,8 +28,8 @@ class Settings(BaseSettings):
     PRIMARY_OCR_ENGINE: Literal["local", "vision_api"] = "local"
     TESSERACT_CMD_PATH: Optional[str] = None  # Optional custom path to tesseract binary if on Windows
 
-    # External LLM Provider: Pure Google Gemini
-    VISION_PROVIDER: Literal["gemini", "custom"] = "gemini"
+    # External LLM Provider: Pure Google Gemini (only supported provider)
+    VISION_PROVIDER: Literal["gemini"] = "gemini"
     
     # Gemini Configuration (Optimized for Flash-Lite with 15 RPM rate limits)
     GEMINI_API_KEY: str = ""
@@ -55,10 +55,8 @@ class Settings(BaseSettings):
 
     @property
     def active_api_key(self) -> str:
-        """Returns the appropriate API key based on the configured VISION_PROVIDER."""
-        if self.VISION_PROVIDER == "gemini":
-            return self.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
-        return self.OPENAI_API_KEY or os.getenv("OPENAI_API_KEY", "")
+        """Returns the Gemini API key from settings or environment."""
+        return self.GEMINI_API_KEY or os.getenv("GEMINI_API_KEY", "") or os.getenv("GOOGLE_API_KEY", "")
 
     model_config = SettingsConfigDict(
         env_file=[".env", "document_agent/.env"],

@@ -89,7 +89,7 @@ class PartCostResult(BaseModel):
 
 class CostReconciliation(BaseModel):
     """Normalized cost calculation contract mapped from Spring Boot CostEstimateResponse."""
-    status: Literal["success", "unavailable"] = "success"
+    status: Literal["success", "unavailable", "insufficient_data"] = "success"
     vehicle: Optional[VehicleSummary] = None
     partsCost: Optional[PartsCost] = None
     laborCost: Optional[LaborCost] = None
@@ -149,6 +149,5 @@ class ClaimProcessResponse(BaseModel):
 class ErrorDetail(BaseModel):
     error: str
     detail: str
-    stage: Optional[str] = None  # e.g. 'document_agent', 'image_agent', 'cost_agent', 'orchestration'
     claim_id: Optional[str] = None
     timestamp: str
