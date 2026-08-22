@@ -54,6 +54,12 @@ document.addEventListener('DOMContentLoaded', async () => {
   // Restore session and fetch live database claims if logged in
   if (AppState.currentUser) {
     await fetchLiveClaims();
+    const hash = window.location.hash.replace(/^#/, '');
+    if (hash) {
+      const [view, claimId] = hash.split('/');
+      if (view) AppState.currentView = view;
+      if (claimId) AppState.selectedClaimId = claimId;
+    }
   } else {
     AppState.currentView = 'login';
   }
@@ -71,6 +77,9 @@ function navigateTo(viewName, claimId = null) {
   AppState.currentView = viewName;
   if (claimId) {
     AppState.selectedClaimId = claimId;
+    window.location.hash = `${viewName}/${claimId}`;
+  } else {
+    window.location.hash = viewName;
   }
   AppState.uiState = 'normal'; // Reset edge state on navigation
   renderApp();

@@ -308,13 +308,13 @@ _llm_semaphore = asyncio.Semaphore(settings.MAX_CONCURRENT_LLM_CALLS)
 
 
 def _get_gemini_endpoint_and_headers(model: str, api_key: str) -> Tuple[str, Dict[str, str]]:
-    """Constructs the correct URL and HTTP headers for Google Gemini API supporting both AIza keys and AQ. auth tokens."""
+    """Constructs the correct URL and HTTP headers for Google Gemini API."""
     base_url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
     headers = {
         "Content-Type": "application/json",
         "x-goog-api-key": api_key,
     }
-    if api_key.startswith("AQ.") or api_key.startswith("ya29."):
+    if api_key.startswith("ya29."):
         headers["Authorization"] = f"Bearer {api_key}"
         return base_url, headers
     return f"{base_url}?key={api_key}", headers
