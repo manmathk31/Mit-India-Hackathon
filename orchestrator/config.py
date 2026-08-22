@@ -12,9 +12,9 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
 
     # Microservice Endpoints
-    DOCUMENT_AGENT_URL: str = "http://localhost:8001"
-    IMAGE_AGENT_URL: str = "http://localhost:8002"
-    COST_AGENT_URL: str = "http://localhost:8082/api/cost/estimate"
+    DOCUMENT_AGENT_URL: str = "http://127.0.0.1:8001"
+    IMAGE_AGENT_URL: str = "http://127.0.0.1:8002"
+    COST_AGENT_URL: str = "http://127.0.0.1:8082/api/cost/estimate"
 
     # Database & Supabase Configuration
     DATABASE_URL: Optional[str] = "postgresql+asyncpg://postgres.yourproject:password@aws-0-ap-south-1.pooler.supabase.com:6543/postgres"

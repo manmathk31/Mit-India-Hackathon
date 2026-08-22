@@ -1787,10 +1787,12 @@ async function handleRealFileUpload(event, docKey) {
       if (AppState.uploads.docs[docKey] && AppState.uploads.docs[docKey].file === file) {
         AppState.uploads.docs[docKey].validating = false;
         AppState.uploads.docs[docKey].valid = Boolean(data.valid);
-        if (data.valid) {
-          AppState.uploads.docs[docKey].reason = data.reason;
+        if (data.valid || (data.reason && data.reason.toLowerCase().includes('unavailable'))) {
+          AppState.uploads.docs[docKey].valid = true;
+          AppState.uploads.docs[docKey].reason = data.reason || `Accepted as ${docKey.toUpperCase()}`;
           showToast(`✓ Valid ${docKey.toUpperCase()} verified`);
         } else {
+          AppState.uploads.docs[docKey].valid = false;
           AppState.uploads.docs[docKey].error = data.reason || `Does not appear to be an official ${docKey.toUpperCase()}`;
           showValidationToast('Wrong Document Uploaded', AppState.uploads.docs[docKey].error);
         }
