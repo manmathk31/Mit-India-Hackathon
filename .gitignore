@@ -1,0 +1,87 @@
+# ==============================================================================
+# ClaimPilot AI — Git Ignore Configuration
+# ==============================================================================
+
+# Virtual Environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment Variables & Secrets (CRITICAL: Never commit real API keys)
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+!*/.env.example
+
+# Python Bytecode & Cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Heavy ML / AI Model Weights (Do not push heavy models to git unless explicitly required)
+# *.onnx
+# *.pt
+# *.pth
+# *.bin
+# *.weights
+# *.safetensors
+# *.h5
+# *.tflite
+# models/*.onnx
+# models/*.pt
+# image_agent/models/*.onnx
+# image_agent/models/*.pt
+!image_agent/models/.gitkeep
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+
+# Local Databases & SQLite
+*.db
+*.sqlite
+*.sqlite3
+claimpilot.db
+*.db-journal
+
+# IDE & Editor Files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs & Temporary Files
+*.log
+logs/
+tmp/
+temp/

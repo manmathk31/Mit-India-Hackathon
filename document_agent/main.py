@@ -14,6 +14,7 @@ from .extractor import (
     ExtractionTimeoutError,
     InvalidImageContentError,
     extract_documents,
+    validate_single_document,
 )
 from .logger import logger
 from .schemas import (
@@ -43,20 +44,21 @@ app.add_middleware(
 async def startup_event():
     logger.info(
         f"Starting {settings.SERVICE_NAME} v{settings.SERVICE_VERSION} "
-        f"[Provider={settings.VISION_PROVIDER}, Model={settings.GEMINI_MODEL if settings.VISION_PROVIDER == 'gemini' else settings.OPENAI_MODEL}, "
-        f"MOCK_MODE={settings.MOCK_MODE}]"
+        f"[Provider={settings.VISION_PROVIDER}, Model={settings.GEMINI_MODEL if settings.VISION_PROVIDER == 'gemini' else 'N/A'}]"
     )
 
 
 @app.get("/health", tags=["System"])
 async def health_check():
     """Liveness & readiness probe for load balancers and orchestrator health checks."""
+    api_key = settings.active_api_key
     return {
         "status": "ok",
         "service": settings.SERVICE_NAME,
         "version": settings.SERVICE_VERSION,
         "provider": settings.VISION_PROVIDER,
-        "mock_mode": settings.MOCK_MODE,
+        "gemini_key_configured": bool(api_key),
+        "gemini_key_missing": not bool(api_key),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
@@ -257,3 +259,32 @@ async def verify_claim_documents(
     )
 
     return response_data
+
+
+@app.post(
+    "/documents/validate-single",
+    tags=["Validation"],
+    summary="Lightweight single-document pre-validation on upload",
+)
+async def validate_single_upload(
+    file: UploadFile = File(..., description="Uploaded document image file"),
+    expected_type: str = Form(..., description="Expected document type: rc | dl | claim_form"),
+):
+    """
+    Instantly validates whether the uploaded file appears to be the expected document type (RC, DL, or Claim Form).
+    Rejects wrong document types (e.g. uploading DL in RC slot or arbitrary selfie/damage photos) before submission.
+    """
+    try:
+        image_bytes = await _read_and_validate_file(file, f"upload_{expected_type}")
+        result = await validate_single_document(image_bytes, expected_type)
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.warning(f"Error during single document pre-validation: {e}")
+        return {
+            "valid": False,
+            "expected_type": expected_type,
+            "detected_type": "UNKNOWN",
+            "reason": f"Could not validate document: {str(e)}",
+        }
