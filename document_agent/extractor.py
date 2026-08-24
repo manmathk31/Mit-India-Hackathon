@@ -130,14 +130,20 @@ def _parse_rc_locally(raw_text: str, overall_conf: float) -> Dict[str, Any]:
     """Extracts RC fields from local OCR text using regex patterns."""
     text_upper = raw_text.upper()
 
-    # Plate / RC Number: standard Indian registration pattern (e.g. MH02CB1234, DL01A1234)
-    plate_match = re.search(r"\b([A-Z]{2}[0-9]{1,2}[A-Z]{0,3}[0-9]{4})\b", text_upper)
-    rc_number = plate_match.group(1) if plate_match else ""
+    # Plate / RC Number: standard Indian registration pattern (e.g. MH02CB1234, MH12 CD 4567, MH-12-RN-8842)
+    plate_match = re.search(r"\b([A-Z]{2}[-\s]?[0-9]{1,2}[-\s]?[A-Z]{0,3}[-\s]?[0-9]{3,4})\b", text_upper)
+    rc_number = plate_match.group(1).strip() if plate_match else ""
+    if rc_number:
+        rc_number = re.sub(r"\s+", " ", rc_number)
     rc_conf = overall_conf if rc_number else 0.3
 
-    # Chassis Number: 17-character VIN/chassis
-    chassis_match = re.search(r"\b([A-HJ-NPR-Z0-9]{17})\b", text_upper)
-    chassis_number = chassis_match.group(1) if chassis_match else ""
+    # Chassis Number: 10 to 18-character VIN/chassis
+    chassis_match = re.search(r"(?:CHASSIS|VIN|C-NO)[:\s]*([A-HJ-NPR-Z0-9\s]{10,22})", text_upper)
+    if chassis_match:
+        chassis_number = re.sub(r"\s+", "", chassis_match.group(1).strip())
+    else:
+        direct_chassis = re.search(r"\b([A-HJ-NPR-Z0-9]{14,18})\b", text_upper)
+        chassis_number = direct_chassis.group(1) if direct_chassis else ""
     chassis_conf = overall_conf if chassis_number else 0.3
 
     # Engine Number
@@ -284,21 +290,34 @@ def _parse_claim_form_locally(raw_text: str, overall_conf: float) -> Dict[str, A
     date_match = re.search(r"(?:INCIDENT|LOSS|ACCIDENT|DATE)[:\s]+(\d{2}[/-]\d{2}[/-]\d{4})", text_raw, re.IGNORECASE)
     incident_date = date_match.group(1) if date_match else ""
 
+    # Claimant / Insured Name
+    claimant_match = re.search(r"(?:CLAIMANT|INSURED|OWNER|POLICYHOLDER|APPLICANT|NAME)[:\s]+([A-Za-z\s\.]{3,50})", text_raw, re.IGNORECASE)
+    claimant_name = claimant_match.group(1).strip() if claimant_match else ""
+    claimant_conf = overall_conf if claimant_name else 0.3
+
+    # Vehicle Plate Number
+    veh_match = re.search(r"(?:VEHICLE|REGISTRATION|PLATE|REGN|REG)[:\s\-#]+([A-Z]{2}[0-9\sA-Z]{6,12})", text_raw, re.IGNORECASE)
+    vehicle_number = veh_match.group(1).strip() if veh_match else ""
+
+    # Policy Number
+    pol_match = re.search(r"(?:POLICY|POL)[:\s\-#]+([A-Z0-9\-\/]{6,30})", text_raw, re.IGNORECASE)
+    policy_number = pol_match.group(1).strip() if pol_match else ""
+
     # Damage Description: verbatim text block
     damage_match = re.search(r"(?:DAMAGE|DETAILS|DESCRIPTION|HOW ACCIDENT OCCURRED)[:\s]+([^\n\r]{10,250})", text_raw, re.IGNORECASE)
     damage_description = damage_match.group(1).strip() if damage_match else raw_text[:200]
     damage_conf = overall_conf if len(damage_description) > 15 else 0.3
 
     return {
-        "claimant_name": "",
-        "claimant_name_confidence": 0.3,
-        "vehicle_number": "",
-        "policy_number": "",
+        "claimant_name": claimant_name,
+        "claimant_name_confidence": claimant_conf,
+        "vehicle_number": vehicle_number,
+        "policy_number": policy_number,
         "incident_date": incident_date,
         "damage_description": damage_description,
         "damage_description_confidence": damage_conf,
         "document_type_detected": "CLAIM_FORM",
-        "confidence": overall_conf if damage_description else 0.4,
+        "confidence": overall_conf if (damage_description or claimant_name) else 0.4,
     }
 
 

@@ -253,25 +253,25 @@ def evaluate_claim_decision(
     # Step 8: Fraud & Document Failure Hard Stops
     # --------------------------------------------------------------------------
     if failed_frauds or doc_status == "warning" or cost_estimate.status in ("unavailable", "insufficient_data"):
-        reason = "document mismatch or failed fraud check"
+        reason = "document mismatch or photo check discrepancy"
         if cost_estimate.status == "unavailable":
-            reason = "cost engine unreachable"
+            reason = "cost estimation service unreachable"
         elif cost_estimate.status == "insufficient_data":
-            reason = "vehicle identity unknown — cannot estimate repair cost"
+            reason = "vehicle details could not be identified — cannot estimate repair cost"
         
         decision_trail.append(
             DecisionTrailEntry(
                 step="Final Adjudication",
-                outcome="Flagged for Manual Investigation",
-                detail=f"Flagged due to {reason}.",
+                outcome="Surveyor Review Required",
+                detail=f"Needs surveyor review due to {reason}.",
                 status="flagged",
                 timestamp=format_ts(26),
             )
         )
         return (
             "flagged",
-            "Flagged: Forensic Discrepancy",
-            f"One or more forensic checks failed ({reason}). Referred to Special Investigation Unit (SIU).",
+            "Under Review: Details Need Verification",
+            f"Needs surveyor review ({reason}). Please verify document and vehicle photo details.",
             decision_trail,
         )
 

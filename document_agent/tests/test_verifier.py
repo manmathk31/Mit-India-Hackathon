@@ -87,17 +87,36 @@ def test_driver_different_from_owner_resolved():
     assert "driver" in cross_res.note.lower()
 
 
+def test_owner_name_across_rc_dl_form_independent_of_username():
+    # User logged in as 'manmath', but RC, DL, and Claim form are all for 'RAHUL SINGH'
+    owner_res, cross_res = verify_owner_name_and_cross_check(
+        policy_owner="manmath",
+        rc_owner="RAHUL SINGH",
+        dl_holder="RAHUL SINGH",
+        claimant_name="RAHUL SINGH",
+    )
+    assert owner_res.status == "verified"
+    assert cross_res.status == "verified"
+    assert owner_res.confidence >= 0.95
+    assert "RAHUL SINGH" in owner_res.value
+    assert "verified" in owner_res.note.lower() or "exact" in owner_res.note.lower()
+
+
 def test_rc_number_verification():
-    # Exact
+    # Exact match across RC and Form
     res_exact = verify_rc_and_plate("MH02CB1234", "MH-02-CB-1234", "MH02CB1234")
     assert res_exact.status == "verified"
+
+    # RC matches Form even if dummy policy was passed
+    res_rc_form = verify_rc_and_plate("MH12RN8842", "MH12 CD 4567", "MH12 CD 4567")
+    assert res_rc_form.status == "verified"
 
     # Minor typo (resolved)
     res_typo = verify_rc_and_plate("MH02CB1234", "MH02CB123A", "MH02CB1234")
     assert res_typo.status == "resolved"
 
-    # Mismatch (warning)
-    res_diff = verify_rc_and_plate("MH02CB1234", "DL01AA9999", "DL01AA9999")
+    # Complete mismatch across RC and Form
+    res_diff = verify_rc_and_plate("MH02CB1234", "DL01AA9999", "KA05MM8888")
     assert res_diff.status == "warning"
 
 

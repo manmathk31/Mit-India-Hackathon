@@ -285,25 +285,35 @@ async def _run_claim_pipeline(
             {"status": cost_result.status, "estimate": cost_result.formatted_final}
         )
 
-    # 6. Execute Fraud Checks Suite & Decision Engine
+    # 6. Execute Fraud & Details Accuracy Checks Suite & Decision Engine
     if yield_event:
-        await yield_event("fraud_decision_running", 90, "Running Anti-Spoofing, Deduplication & IRDAI Decision Engine...")
+        await yield_event("fraud_decision_running", 90, "Verifying details across documents, vehicle photos & claim form...")
 
-    extracted_plate = doc_result.get("extracted_plate_number", policy.rc_number)
+    extracted_plate = doc_result.get("extracted_plate_number") or ""
     damage_desc_form = doc_result.get("extracted_damage_description_from_form", "")
+    form_vehicle = doc_result.get("extracted_vehicle_number_from_form", "")
+    verified_plate = extracted_plate or form_vehicle or policy.rc_number
 
     fraud_checks = run_all_fraud_checks(
         damage_photos_bytes=raw_photos_bytes,
-        extracted_plate=extracted_plate,
+        extracted_plate=extracted_plate or verified_plate,
         policy_rc=policy.rc_number,
         damage_description_from_form=damage_desc_form,
         detected_parts=detections,
         claim_id=tracking_claim_id,
+        form_plate=form_vehicle or verified_plate,
     )
+
+    verified_owner = policy.owner_name
+    for f in doc_result.get("fields", []):
+        if f.get("name") == "owner_name" and f.get("value") and f.get("value") != "NOT_EXTRACTED":
+            verified_owner = f.get("value")
+            break
 
     policy_dict = {
         "number": policy.policy_number,
-        "holder": policy.owner_name,
+        "holder": verified_owner,
+        "rc_number": verified_plate,
         "plan": policy.plan,
         "expiry": policy.expiry,
         "status": policy.status,
@@ -421,7 +431,7 @@ async def _run_claim_pipeline(
             "model": extracted_vehicle_meta.get("model", "UNKNOWN"),
             "variant": extracted_vehicle_meta.get("variant", "UNKNOWN"),
             "year": extracted_vehicle_meta.get("registration_year"),
-            "registration": policy.rc_number,
+            "registration": verified_plate,
             "fuel": "UNKNOWN",
         },
         policy=policy_dict,

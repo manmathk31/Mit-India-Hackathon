@@ -286,8 +286,52 @@ async def init_db():
                     # Ignore if sqlite or syntax variance
                     pass
         logger.info("Database schema initialized and columns auto-migrated successfully.")
+
+        # Seed default Admin and Claimant accounts if missing
+        await _seed_default_users()
     except Exception as e:
         logger.warning(f"Database table initialization warning (schema may already exist in Supabase): {str(e)}")
+
+
+async def _seed_default_users():
+    """Seeds default admin/surveyor and claimant accounts into database."""
+    try:
+        import bcrypt
+        async with AsyncSessionLocal() as session:
+            # Check Admin
+            stmt = select(User).where(User.email == "admin@claimpilot.ai")
+            res = await session.execute(stmt)
+            if not res.scalar_one_or_none():
+                pw_hash = bcrypt.hashpw("adminpassword123".encode("utf-8")[:72], bcrypt.gensalt()).decode("utf-8")
+                admin_user = User(
+                    email="admin@claimpilot.ai",
+                    password_hash=pw_hash,
+                    full_name="Chief Claims Officer / Surveyor",
+                    role="admin",
+                    badge_number="SURVEYOR-IN-8890",
+                    avatar_url="https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100&auto=format&fit=crop&q=80",
+                )
+                session.add(admin_user)
+                logger.info("Seeded default Admin account: admin@claimpilot.ai")
+
+            # Check Claimant
+            stmt = select(User).where(User.email == "claimant@claimpilot.ai")
+            res = await session.execute(stmt)
+            if not res.scalar_one_or_none():
+                pw_hash = bcrypt.hashpw("claimantpassword123".encode("utf-8")[:72], bcrypt.gensalt()).decode("utf-8")
+                claimant_user = User(
+                    email="claimant@claimpilot.ai",
+                    password_hash=pw_hash,
+                    full_name="Rajesh Anand Kumar",
+                    role="claimant",
+                    avatar_url="https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&auto=format&fit=crop&q=80",
+                )
+                session.add(claimant_user)
+                logger.info("Seeded default Claimant account: claimant@claimpilot.ai")
+
+            await session.commit()
+    except Exception as e:
+        logger.warning(f"Error seeding default accounts: {e}")
 
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
