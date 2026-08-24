@@ -137,7 +137,7 @@ def test_fraud_failure_flagged():
     )
 
     assert status == "flagged"
-    assert "Fraud" in label or "Discrepancy" in label
+    assert "Verification" in label or "Review" in label or "Mismatch" in label or "Discrepancy" in label
 
 
 def test_cost_insufficient_data_flagged():

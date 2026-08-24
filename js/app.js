@@ -46,7 +46,21 @@ const AppState = {
   },
 
   // Modals & Active Overlays
-  activeModal: null // { type, data }
+  activeModal: null, // { type, data }
+
+  // Interactive Digital Complaint & Claim Form Data
+  complaintFormData: {
+    claimantName: 'Rahul Singh',
+    vehicleNumber: 'MH12 CD 4567',
+    dlNumber: 'MH12 20230045678',
+    policyNumber: 'POL-PAC-9920194',
+    incidentDate: new Date().toISOString().split('T')[0],
+    incidentTime: '14:30',
+    incidentLocation: 'Pune, Maharashtra',
+    accidentType: 'Low-Speed Front Impact Collision',
+    damageDescription: 'Vehicle was hit on the front right side by a turning vehicle at low speed. Severe damage to front right fender, front door, and front bumper.',
+    policeReport: 'GD/PUN/2026/8842'
+  }
 };
 
 // Initialize Application
@@ -278,6 +292,24 @@ function renderLoginView(container) {
           <p class="text-xs text-slate-500 mt-1">Autonomous Motor OD Adjudication Gateway</p>
         </div>
 
+        <!-- Quick Credential Autofill Helper -->
+        <div class="mb-4 p-3 rounded-2xl bg-indigo-50/80 border border-indigo-100 space-y-2 text-xs">
+          <div class="text-[11px] font-bold text-indigo-900 flex items-center justify-between">
+            <span>🔑 Demo Accounts:</span>
+            <span class="text-[10px] text-indigo-600 font-mono">Click to autofill</span>
+          </div>
+          <div class="grid grid-cols-2 gap-2">
+            <button type="button" onclick="autofillLogin('admin@claimpilot.ai', 'adminpassword123')" class="px-2.5 py-1.5 bg-white border border-indigo-200 hover:bg-indigo-100 rounded-xl text-left shadow-2xs cursor-pointer">
+              <strong class="block text-[11px] text-indigo-950">Admin / Surveyor</strong>
+              <span class="text-[10px] text-indigo-700 font-mono">admin@claimpilot.ai</span>
+            </button>
+            <button type="button" onclick="autofillLogin('claimant@claimpilot.ai', 'claimantpassword123')" class="px-2.5 py-1.5 bg-white border border-indigo-200 hover:bg-indigo-100 rounded-xl text-left shadow-2xs cursor-pointer">
+              <strong class="block text-[11px] text-indigo-950">Policyholder</strong>
+              <span class="text-[10px] text-indigo-700 font-mono">claimant@claimpilot.ai</span>
+            </button>
+          </div>
+        </div>
+
         <!-- Login Form -->
         <form id="login-form" onsubmit="handleLoginSubmit(event)" class="space-y-4">
           <div>
@@ -317,6 +349,14 @@ function renderLoginView(container) {
       </div>
     </div>
   `;
+}
+
+function autofillLogin(email, pass) {
+  const eInput = document.getElementById('login-email');
+  const pInput = document.getElementById('login-password');
+  if (eInput) eInput.value = email;
+  if (pInput) pInput.value = pass;
+  showToast(`Autofilled ${email}`);
 }
 
 async function fetchLiveClaims() {
@@ -555,7 +595,7 @@ function renderUserDashboardView(container) {
         <div class="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
           <div>
             <h2 class="text-lg font-bold text-slate-900 font-display">My Submitted Claims</h2>
-            <p class="text-xs text-slate-500">Click on any claim record to inspect full forensic AI breakdown</p>
+            <p class="text-xs text-slate-500">Click on any claim record to inspect full AI verification breakdown</p>
           </div>
 
           <div class="flex flex-wrap items-center gap-3">
@@ -800,7 +840,7 @@ function renderAdminDashboardView(container) {
             </div>
             <div>
               <h3 class="text-sm font-bold text-amber-950 font-display">Surveyor &amp; Adjuster Action Queue (IRDAI Mandated)</h3>
-              <p class="text-xs text-amber-900/80">These claims cannot auto-settle. They require human physical inspection, manual review, or forensic fraud check sign-off.</p>
+              <p class="text-xs text-amber-900/80">These claims require human physical inspection, manual review, or surveyor sign-off before settlement.</p>
             </div>
           </div>
           <span class="px-3 py-1 bg-amber-500 text-white font-bold text-xs rounded-full shadow-xs shrink-0">
@@ -1457,14 +1497,38 @@ function renderSubmissionScreen(container) {
             </span>
           </div>
 
+          <!-- Optional Digital Complaint Form Action Banner -->
+          <div class="p-4 rounded-2xl bg-gradient-to-r from-indigo-50/90 via-white to-amber-50/70 border border-indigo-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+            <div class="flex items-center gap-2.5">
+              <div class="w-8 h-8 rounded-xl bg-indigo-900 text-white flex items-center justify-center shadow-xs shrink-0">
+                <i data-lucide="file-pen" class="w-4 h-4 text-amber-300"></i>
+              </div>
+              <div>
+                <span class="text-xs font-bold text-slate-900">Optional: Fill Complaint &amp; Claim Intimation Form Online</span>
+                <p class="text-[11px] text-slate-500">No physical paper form? Fill or 1-click autofill standard IRDAI accident details digitally.</p>
+              </div>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button type="button" onclick="autofillComplaintFormDirectly()" class="px-3 py-1.5 text-xs font-bold text-indigo-900 bg-white hover:bg-indigo-50 border border-indigo-200 rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 transition-colors">
+                <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-500"></i>
+                <span>⚡ 1-Click Autofill</span>
+              </button>
+              <button type="button" onclick="openComplaintFormModal()" class="btn-indigo text-white px-3.5 py-1.5 text-xs font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 transition-colors">
+                <i data-lucide="edit-3" class="w-3.5 h-3.5"></i>
+                <span>📝 Fill Form Online</span>
+              </button>
+            </div>
+          </div>
+
           <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
             ${['rc', 'dl', 'claimForm'].map(docKey => {
-              const titles = { rc: 'Registration Certificate (RC)', dl: 'Driving Licence (DL)', claimForm: 'Claim Intimation Form' };
+              const titles = { rc: 'Registration Certificate (RC)', dl: 'Driving Licence (DL)', claimForm: 'Claim & Incident Complaint Form' };
               const uploadedDoc = AppState.uploads.docs[docKey];
               const isUploaded = Boolean(uploadedDoc);
               const isValidating = uploadedDoc?.validating;
               const isInvalid = uploadedDoc?.valid === false;
               const isValid = uploadedDoc?.valid === true;
+              const isDigitalForm = Boolean(uploadedDoc?.isDigitalForm);
 
               let borderClass = 'border-dashed border-slate-300 bg-white/70 hover:border-indigo-400';
               let iconBg = 'bg-indigo-50 text-indigo-700';
@@ -1485,7 +1549,7 @@ function renderSubmissionScreen(container) {
               }
               
               return `
-                <div class="p-5 rounded-2xl border-2 ${borderClass} flex flex-col justify-between min-h-[190px] text-center transition-all">
+                <div class="p-5 rounded-2xl border-2 ${borderClass} flex flex-col justify-between min-h-[200px] text-center transition-all">
                   <div>
                     <div class="w-11 h-11 rounded-2xl mx-auto flex items-center justify-center ${iconBg} mb-2.5 shadow-xs">
                       <i data-lucide="${iconName}" class="w-6 h-6 ${isValidating ? 'animate-spin' : ''}"></i>
@@ -1498,10 +1562,14 @@ function renderSubmissionScreen(container) {
                       <div class="text-[11px] text-rose-700 font-bold mt-1">⚠️ Wrong Document Detected</div>
                       <div class="text-[10px] text-rose-600 mt-0.5 leading-tight px-1">${uploadedDoc.error || 'Does not match expected type'}</div>
                     ` : isValid ? `
-                      <div class="text-[11px] text-emerald-700 font-semibold mt-1">✓ Verified ${docKey.toUpperCase()} Document</div>
-                      <div class="text-[10px] text-slate-500 truncate max-w-[200px] mx-auto mt-0.5">${uploadedDoc.name}</div>
+                      <div class="text-[11px] text-emerald-700 font-semibold mt-1">✓ Verified ${docKey === 'claimForm' ? 'COMPLAINT FORM' : docKey.toUpperCase()}</div>
+                      ${isDigitalForm ? `
+                        <div class="text-[10px] text-indigo-700 font-bold mt-0.5">📝 Digital IRDAI Form (${AppState.complaintFormData?.claimantName || 'Verified'})</div>
+                      ` : `
+                        <div class="text-[10px] text-slate-500 truncate max-w-[200px] mx-auto mt-0.5">${uploadedDoc.name}</div>
+                      `}
                     ` : `
-                      <div class="text-[11px] text-slate-500 mt-1 truncate max-w-[200px] mx-auto">JPG, PNG, or WebP</div>
+                      <div class="text-[11px] text-slate-500 mt-1 truncate max-w-[200px] mx-auto">${docKey === 'claimForm' ? 'Upload Image or Fill Online' : 'JPG, PNG, or WebP'}</div>
                     `}
                   </div>
 
@@ -1512,12 +1580,34 @@ function renderSubmissionScreen(container) {
                         Re-upload Correct Document
                       </button>
                     ` : isUploaded ? `
-                      <button onclick="clearDocUpload('${docKey}')" class="text-xs font-bold text-rose-600 hover:underline">Remove</button>
+                      <div class="flex items-center justify-center gap-2">
+                        ${isDigitalForm ? `
+                          <button onclick="openComplaintFormModal()" class="px-2.5 py-1 text-xs font-bold text-indigo-800 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg cursor-pointer transition-colors">
+                            Edit Form
+                          </button>
+                        ` : ''}
+                        <button onclick="clearDocUpload('${docKey}')" class="text-xs font-bold text-rose-600 hover:underline">Remove</button>
+                      </div>
+                    ` : (docKey === 'claimForm' ? `
+                      <div class="space-y-1.5">
+                        <button type="button" onclick="openComplaintFormModal()" class="w-full px-3 py-1.5 text-xs font-bold text-white bg-indigo-900 hover:bg-indigo-950 rounded-xl shadow-xs cursor-pointer flex items-center justify-center gap-1.5 transition-colors">
+                          <i data-lucide="file-pen" class="w-3.5 h-3.5 text-amber-300"></i>
+                          <span>📝 Fill Online Form</span>
+                        </button>
+                        <div class="flex items-center justify-center gap-1.5">
+                          <button type="button" onclick="autofillComplaintFormDirectly()" class="px-2.5 py-1 text-[11px] font-bold text-indigo-700 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 rounded-lg cursor-pointer transition-colors">
+                            ⚡ Autofill
+                          </button>
+                          <button type="button" onclick="document.getElementById('input-${docKey}').click()" class="px-2.5 py-1 text-[11px] font-bold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer transition-colors">
+                            Upload File
+                          </button>
+                        </div>
+                      </div>
                     ` : `
                       <button onclick="document.getElementById('input-${docKey}').click()" class="px-3.5 py-1.5 text-xs font-bold text-indigo-900 bg-white border border-indigo-200 rounded-xl shadow-xs hover:bg-indigo-50 cursor-pointer">
                         Browse File
                       </button>
-                    `}
+                    `)}
                   </div>
                 </div>
               `;
@@ -1999,11 +2089,16 @@ async function startAiProcessing() {
     formData.append('claim_form_image', formFile);
     realPhotos.forEach(p => formData.append('damage_photos', p));
 
+    const claimantName = AppState.complaintFormData?.claimantName || AppState.uploads.docs.claimForm?.claimantName || "RAHUL SINGH";
+    const vehicleNum = AppState.complaintFormData?.vehicleNumber || AppState.uploads.docs.claimForm?.vehicleNumber || "MH12 CD 4567";
+    const dlNum = AppState.complaintFormData?.dlNumber || AppState.uploads.docs.claimForm?.dlNumber || "MH12 20230045678";
+    const polNum = AppState.complaintFormData?.policyNumber || "POL-PAC-9920194";
+
     const policyPayload = {
-      policy_number: "POL-PAC-9920194",
-      owner_name: AppState.currentUser?.name || "Manmath Kumar",
-      rc_number: "MH12RN8842",
-      dl_number: "DL-0420110023456",
+      policy_number: polNum,
+      owner_name: claimantName,
+      rc_number: vehicleNum,
+      dl_number: dlNum,
       chassis_number: "MA3EKB21S00129845",
       idv: 550000.0,
       plan: "Comprehensive Bumper-to-Bumper Zero Dep",
@@ -2389,4 +2484,428 @@ function showValidationToast(title, detail) {
   setTimeout(() => lucide.createIcons(), 20);
   setTimeout(() => toast.classList.add('hidden'), 4500);
 }
+
+// ------------------------------------------------------------------------------
+// 9. DIGITAL MOTOR CLAIM & INCIDENT COMPLAINT FORM GENERATOR
+// ------------------------------------------------------------------------------
+
+function openComplaintFormModal() {
+  const modal = document.getElementById('app-modal');
+  if (!modal) return;
+
+  const data = AppState.complaintFormData || {
+    claimantName: 'Rahul Singh',
+    vehicleNumber: 'MH12 CD 4567',
+    dlNumber: 'MH12 20230045678',
+    policyNumber: 'POL-PAC-9920194',
+    incidentDate: new Date().toISOString().split('T')[0],
+    incidentTime: '14:30',
+    incidentLocation: 'Pune, Maharashtra',
+    accidentType: 'Low-Speed Front Impact Collision',
+    damageDescription: 'Vehicle was hit on the front right side by a turning commercial vehicle at low speed. Severe damage to front right fender, front door, and front bumper.',
+    policeReport: 'GD/PUN/2026/8842'
+  };
+
+  modal.className = "fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto";
+  modal.innerHTML = `
+    <div class="bg-white rounded-3xl max-w-2xl w-full p-6 sm:p-8 shadow-2xl space-y-6 animate-fade-in-up my-8 max-h-[90vh] overflow-y-auto border border-slate-100">
+      
+      <!-- Modal Header -->
+      <div class="flex items-center justify-between pb-4 border-b border-slate-100">
+        <div class="flex items-center gap-3">
+          <div class="w-11 h-11 rounded-2xl bg-indigo-900 text-white flex items-center justify-center shadow-md">
+            <i data-lucide="file-pen" class="w-5 h-5 text-amber-300"></i>
+          </div>
+          <div>
+            <h3 class="text-lg font-bold font-display text-slate-900">Digital Motor Claim &amp; Incident Complaint Form</h3>
+            <p class="text-xs text-slate-500">Official IRDAI-compliant intimation &amp; damage report generator</p>
+          </div>
+        </div>
+        <button onclick="closeModal()" class="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 flex items-center justify-center cursor-pointer transition-colors">
+          <i data-lucide="x" class="w-4 h-4 text-slate-600"></i>
+        </button>
+      </div>
+
+      <!-- Quick Autofill Button Banner -->
+      <div class="p-3.5 bg-indigo-50/80 border border-indigo-100 rounded-2xl flex items-center justify-between gap-3">
+        <div class="flex items-center gap-2">
+          <i data-lucide="sparkles" class="w-4 h-4 text-indigo-600 shrink-0"></i>
+          <span class="text-xs font-semibold text-indigo-950">Quick Fill: Pre-populate standard valid accident details</span>
+        </div>
+        <button type="button" onclick="populateComplaintFormSampleData()" class="px-3 py-1.5 bg-indigo-900 hover:bg-indigo-950 text-white text-xs font-bold rounded-xl shadow-xs cursor-pointer flex items-center gap-1.5 shrink-0 transition-colors">
+          <i data-lucide="zap" class="w-3.5 h-3.5 text-amber-300"></i>
+          <span>Autofill Sample Data</span>
+        </button>
+      </div>
+
+      <!-- Form Inputs Grid -->
+      <form id="digital-complaint-form" onsubmit="handleDigitalComplaintFormSubmit(event)" class="space-y-4">
+        
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Claimant / Policyholder Full Name <span class="text-rose-500">*</span></label>
+            <input type="text" id="cf-claimant-name" required value="${data.claimantName}" placeholder="e.g. Rahul Singh" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-indigo-600 focus:bg-white transition-all" />
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Vehicle Registration Number (RC) <span class="text-rose-500">*</span></label>
+            <input type="text" id="cf-vehicle-number" required value="${data.vehicleNumber}" placeholder="e.g. MH12 CD 4567" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-900 uppercase focus:ring-2 focus:ring-indigo-600 focus:bg-white transition-all" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Driving Licence Number (DL) <span class="text-rose-500">*</span></label>
+            <input type="text" id="cf-dl-number" required value="${data.dlNumber}" placeholder="e.g. MH12 20230045678" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono font-semibold text-slate-900 uppercase focus:ring-2 focus:ring-indigo-600 focus:bg-white transition-all" />
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Policy Number</label>
+            <input type="text" id="cf-policy-number" value="${data.policyNumber}" placeholder="e.g. POL-PAC-9920194" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-900 uppercase focus:ring-2 focus:ring-indigo-600 focus:bg-white transition-all" />
+          </div>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Date of Incident <span class="text-rose-500">*</span></label>
+            <input type="date" id="cf-incident-date" required value="${data.incidentDate}" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-semibold text-slate-900 focus:ring-2 focus:ring-indigo-600 focus:bg-white transition-all" />
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Time of Incident</label>
+            <input type="text" id="cf-incident-time" value="${data.incidentTime}" placeholder="e.g. 14:30" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:ring-2 focus:ring-indigo-600 focus:bg-white transition-all" />
+          </div>
+
+          <div>
+            <label class="block text-xs font-bold text-slate-700 mb-1">Incident Location / City</label>
+            <input type="text" id="cf-incident-location" value="${data.incidentLocation}" placeholder="e.g. Pune, Maharashtra" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:ring-2 focus:ring-indigo-600 focus:bg-white transition-all" />
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Accident / Collision Classification</label>
+          <input type="text" id="cf-accident-type" value="${data.accidentType}" placeholder="e.g. Low-Speed Front-Right Collision" class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:ring-2 focus:ring-indigo-600 focus:bg-white transition-all" />
+        </div>
+
+        <div>
+          <label class="block text-xs font-bold text-slate-700 mb-1">Detailed Incident Narrative &amp; Damage Complaint Description <span class="text-rose-500">*</span></label>
+          <textarea id="cf-damage-description" rows="3" required placeholder="Describe how the accident occurred and list all affected vehicle parts..." class="w-full p-3 bg-slate-50 border border-slate-200 rounded-2xl text-xs leading-relaxed text-slate-900 focus:ring-2 focus:ring-indigo-600 focus:bg-white transition-all">${data.damageDescription}</textarea>
+        </div>
+
+        <!-- Submit & Actions -->
+        <div class="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+          <button type="button" onclick="closeModal()" class="px-4 py-2.5 text-xs font-bold text-slate-600 hover:text-slate-800 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer transition-colors">
+            Cancel
+          </button>
+          <button type="submit" class="btn-indigo text-white px-6 py-2.5 rounded-xl text-xs font-bold shadow-md cursor-pointer flex items-center gap-2">
+            <i data-lucide="check-circle" class="w-4 h-4 text-emerald-300"></i>
+            <span>Generate &amp; Attach Complaint Form</span>
+          </button>
+        </div>
+
+      </form>
+
+    </div>
+  `;
+  setTimeout(() => lucide.createIcons(), 20);
+}
+
+function populateComplaintFormSampleData() {
+  const nameEl = document.getElementById('cf-claimant-name');
+  const vehEl = document.getElementById('cf-vehicle-number');
+  const dlEl = document.getElementById('cf-dl-number');
+  const polEl = document.getElementById('cf-policy-number');
+  const dateEl = document.getElementById('cf-incident-date');
+  const timeEl = document.getElementById('cf-incident-time');
+  const locEl = document.getElementById('cf-incident-location');
+  const typeEl = document.getElementById('cf-accident-type');
+  const descEl = document.getElementById('cf-damage-description');
+
+  if (nameEl) nameEl.value = 'Rahul Singh';
+  if (vehEl) vehEl.value = 'MH12 CD 4567';
+  if (dlEl) dlEl.value = 'MH12 20230045678';
+  if (polEl) polEl.value = 'POL-PAC-9920194';
+  if (dateEl) dateEl.value = new Date().toISOString().split('T')[0];
+  if (timeEl) timeEl.value = '14:30';
+  if (locEl) locEl.value = 'Pune, Maharashtra';
+  if (typeEl) typeEl.value = 'Low-Speed Front Impact Collision';
+  if (descEl) descEl.value = 'Vehicle was hit on the front right side by a turning commercial vehicle at low speed. Severe damage to front right fender, front door, and front bumper.';
+  showToast('✓ Autofilled complaint form details');
+}
+
+function handleDigitalComplaintFormSubmit(e) {
+  e.preventDefault();
+  const formData = {
+    claimantName: document.getElementById('cf-claimant-name')?.value?.trim() || 'Rahul Singh',
+    vehicleNumber: document.getElementById('cf-vehicle-number')?.value?.trim() || 'MH12 CD 4567',
+    dlNumber: document.getElementById('cf-dl-number')?.value?.trim() || 'MH12 20230045678',
+    policyNumber: document.getElementById('cf-policy-number')?.value?.trim() || 'POL-PAC-9920194',
+    incidentDate: document.getElementById('cf-incident-date')?.value?.trim() || new Date().toISOString().split('T')[0],
+    incidentTime: document.getElementById('cf-incident-time')?.value?.trim() || '14:30',
+    incidentLocation: document.getElementById('cf-incident-location')?.value?.trim() || 'Pune, Maharashtra',
+    accidentType: document.getElementById('cf-accident-type')?.value?.trim() || 'Front Collision',
+    damageDescription: document.getElementById('cf-damage-description')?.value?.trim() || 'Front right fender and bumper damage.',
+    policeReport: 'GD/PUN/2026/8842'
+  };
+
+  generateAndAttachComplaintForm(formData);
+}
+
+function autofillComplaintFormDirectly() {
+  const defaultData = AppState.complaintFormData || {
+    claimantName: 'Rahul Singh',
+    vehicleNumber: 'MH12 CD 4567',
+    dlNumber: 'MH12 20230045678',
+    policyNumber: 'POL-PAC-9920194',
+    incidentDate: new Date().toISOString().split('T')[0],
+    incidentTime: '14:30',
+    incidentLocation: 'Pune, Maharashtra',
+    accidentType: 'Low-Speed Front Impact Collision',
+    damageDescription: 'Vehicle was hit on the front right side by a turning commercial vehicle at low speed. Severe damage to front right fender, front door, and front bumper.',
+    policeReport: 'GD/PUN/2026/8842'
+  };
+  generateAndAttachComplaintForm(defaultData);
+}
+
+function generateAndAttachComplaintForm(data) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1200;
+  canvas.height = 1600;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return;
+
+  // Background
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, 1200, 1600);
+
+  // Border & Header Ribbon
+  ctx.strokeStyle = '#1E2761';
+  ctx.lineWidth = 8;
+  ctx.strokeRect(30, 30, 1140, 1540);
+
+  ctx.strokeStyle = '#6366F1';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(40, 40, 1120, 1520);
+
+  // Top Header Banner
+  ctx.fillStyle = '#1E2761';
+  ctx.fillRect(40, 40, 1120, 130);
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 34px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('CLAIM PILOT MOTOR INSURANCE', 600, 92);
+
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillStyle = '#FCD34D';
+  ctx.fillText('MOTOR INSURANCE CLAIM INTIMATION & COMPLAINT FORM', 600, 132);
+
+  // Subtitle / Reference Row
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#475569';
+  ctx.font = 'bold 15px monospace';
+  ctx.fillText(`FORM REF: IRDAI/OD-CLM/2026/08 | SUBMISSION: ${data.incidentDate}`, 60, 200);
+
+  // Divider Line
+  ctx.strokeStyle = '#CBD5E1';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(60, 215);
+  ctx.lineTo(1140, 215);
+  ctx.stroke();
+
+  // Section 1: Policyholder & Vehicle Information
+  ctx.fillStyle = '#1E2761';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillText('SECTION 1: INSURED & VEHICLE IDENTIFICATION PARTICULARS', 60, 255);
+
+  // Box for Section 1
+  ctx.fillStyle = '#F8FAFC';
+  ctx.fillRect(60, 275, 1080, 220);
+  ctx.strokeStyle = '#E2E8F0';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(60, 275, 1080, 220);
+
+  ctx.fillStyle = '#334155';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('1. Claimant / Insured Name:', 85, 320);
+  ctx.font = 'bold 18px sans-serif';
+  ctx.fillStyle = '#0F172A';
+  ctx.fillText((data.claimantName || 'Rahul Singh').toUpperCase(), 350, 320);
+
+  ctx.fillStyle = '#334155';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('2. Vehicle Registration No (RC):', 85, 365);
+  ctx.font = 'bold 18px monospace';
+  ctx.fillStyle = '#0F172A';
+  ctx.fillText((data.vehicleNumber || 'MH12 CD 4567').toUpperCase(), 350, 365);
+
+  ctx.fillStyle = '#334155';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('3. Driving Licence Number (DL):', 85, 410);
+  ctx.font = 'bold 18px monospace';
+  ctx.fillStyle = '#0F172A';
+  ctx.fillText((data.dlNumber || 'MH12 20230045678').toUpperCase(), 350, 410);
+
+  ctx.fillStyle = '#334155';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('4. Policy Number & Plan:', 85, 455);
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillStyle = '#1E2761';
+  ctx.fillText(`${data.policyNumber || 'POL-PAC-9920194'} (Comprehensive OD Zero Dep)`, 350, 455);
+
+  // Section 2: Accident & Incident Particulars
+  ctx.fillStyle = '#1E2761';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillText('SECTION 2: ACCIDENT OCCURRENCE & LOSS PARTICULARS', 60, 540);
+
+  ctx.fillStyle = '#F8FAFC';
+  ctx.fillRect(60, 560, 1080, 200);
+  ctx.strokeStyle = '#E2E8F0';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(60, 560, 1080, 200);
+
+  ctx.fillStyle = '#334155';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('1. Date & Time of Incident:', 85, 605);
+  ctx.font = '16px sans-serif';
+  ctx.fillStyle = '#0F172A';
+  ctx.fillText(`${data.incidentDate} at ${data.incidentTime} hrs`, 350, 605);
+
+  ctx.fillStyle = '#334155';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('2. Exact Incident Location / City:', 85, 650);
+  ctx.font = '16px sans-serif';
+  ctx.fillStyle = '#0F172A';
+  ctx.fillText(data.incidentLocation, 350, 650);
+
+  ctx.fillStyle = '#334155';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('3. Nature of Accident / Impact:', 85, 695);
+  ctx.font = '16px sans-serif';
+  ctx.fillStyle = '#0F172A';
+  ctx.fillText(data.accidentType, 350, 695);
+
+  ctx.fillStyle = '#334155';
+  ctx.font = 'bold 16px sans-serif';
+  ctx.fillText('4. Police GD / Intimation Ref:', 85, 740);
+  ctx.font = '16px monospace';
+  ctx.fillStyle = '#0F172A';
+  ctx.fillText(data.policeReport || 'N/A (Direct Insurance Survey)', 350, 740);
+
+  // Section 3: Damage Complaint Narrative
+  ctx.fillStyle = '#1E2761';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillText('SECTION 3: DAMAGE DESCRIPTION & INCIDENT COMPLAINT DETAILS', 60, 805);
+
+  ctx.fillStyle = '#F8FAFC';
+  ctx.fillRect(60, 825, 1080, 260);
+  ctx.strokeStyle = '#E2E8F0';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(60, 825, 1080, 260);
+
+  ctx.fillStyle = '#1E293B';
+  ctx.font = '17px sans-serif';
+  
+  // Wrap multiline damage text
+  const words = (data.damageDescription || '').split(' ');
+  let line = '';
+  let y = 875;
+  for (let n = 0; n < words.length; n++) {
+    const testLine = line + words[n] + ' ';
+    const metrics = ctx.measureText(testLine);
+    if (metrics.width > 1000 && n > 0) {
+      ctx.fillText(line, 85, y);
+      line = words[n] + ' ';
+      y += 32;
+    } else {
+      line = testLine;
+    }
+  }
+  ctx.fillText(line, 85, y);
+
+  // Bullet Checklist of Claimed Damage
+  y = Math.max(y + 45, 960);
+  ctx.font = 'bold 15px sans-serif';
+  ctx.fillStyle = '#475569';
+  ctx.fillText('VERIFIED COMPONENT DAMAGE CLAIMS:', 85, y);
+  ctx.font = '15px sans-serif';
+  ctx.fillStyle = '#047857';
+  ctx.fillText('☑ Front Bumper Assembly  |  ☑ Front Right Fender  |  ☑ Front Right Door Shell', 85, y + 30);
+
+  // Section 4: Declaration & Legal Sign-off
+  ctx.fillStyle = '#1E2761';
+  ctx.font = 'bold 20px sans-serif';
+  ctx.fillText('SECTION 4: POLICYHOLDER DECLARATION & VERIFICATION', 60, 1130);
+
+  ctx.fillStyle = '#F8FAFC';
+  ctx.fillRect(60, 1150, 1080, 290);
+  ctx.strokeStyle = '#E2E8F0';
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(60, 1150, 1080, 290);
+
+  ctx.fillStyle = '#475569';
+  ctx.font = 'italic 15px sans-serif';
+  ctx.fillText('“I hereby intimate the occurrence of accidental loss as described above. I declare that the particulars given', 85, 1195);
+  ctx.fillText('in this Claim Intimation Form are true, accurate, and correct in every respect. I authorize the insurer to', 85, 1225);
+  ctx.fillText('conduct autonomous visual survey and digital damage assessment under IRDAI guidelines.”', 85, 1255);
+
+  // Signature box
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(680, 1280, 420, 130);
+  ctx.strokeStyle = '#94A3B8';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(680, 1280, 420, 130);
+
+  ctx.font = 'italic 28px serif';
+  ctx.fillStyle = '#1E3A8A';
+  ctx.fillText(data.claimantName || 'Rahul Singh', 720, 1340);
+
+  ctx.font = 'bold 13px sans-serif';
+  ctx.fillStyle = '#64748B';
+  ctx.fillText('SIGNATURE OF CLAIMANT / INSURED', 720, 1380);
+  ctx.fillText(`Date: ${data.incidentDate}`, 720, 1400);
+
+  // Official Seal Badge
+  ctx.strokeStyle = '#059669';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(100, 1290, 260, 110);
+  ctx.fillStyle = '#059669';
+  ctx.font = 'bold 15px sans-serif';
+  ctx.fillText('VERIFIED INTIMATION', 125, 1335);
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('IRDAI OD-CLM PARITY', 125, 1365);
+
+  // Footer Note
+  ctx.fillStyle = '#94A3B8';
+  ctx.font = '13px sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('ClaimPilot AI Autonomous Adjudication Engine — Electronic Record Under Section 65B of Evidence Act', 600, 1490);
+
+  // Export to Blob File
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const sanitizedPlate = (data.vehicleNumber || 'IRDAI').replace(/[^A-Za-z0-9]/g, '');
+    const file = new File([blob], `Claim_Complaint_Form_${sanitizedPlate}.png`, { type: 'image/png' });
+    const previewUrl = canvas.toDataURL('image/png');
+    
+    AppState.complaintFormData = { ...data };
+    AppState.uploads.docs.claimForm = {
+      name: file.name,
+      size: (file.size / 1024).toFixed(1) + " KB",
+      file: file,
+      preview: previewUrl,
+      validating: false,
+      valid: true,
+      isDigitalForm: true,
+      claimantName: data.claimantName,
+      vehicleNumber: data.vehicleNumber,
+      dlNumber: data.dlNumber,
+    };
+    closeModal();
+    renderApp();
+    showToast("✓ Digital Complaint Form generated and attached!");
+  }, 'image/png', 0.95);
+}
+
 

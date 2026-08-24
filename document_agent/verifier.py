@@ -104,8 +104,9 @@ def verify_owner_name_and_cross_check(
     match_thresh: float = 80.0,
 ) -> Tuple[FieldVerificationResult, FieldVerificationResult]:
     """
-    Cross-checks owner names across Policy, RC, DL, and Claim Form to detect
-    discrepancies, authorized third-party drivers, or potential identity fraud.
+    Cross-checks owner and driver names across documents (RC, DL, and Claim/Complaint Form)
+    to detect discrepancies, authorized third-party drivers, or potential identity fraud.
+    Prioritizes concordance across submitted documents (RC, DL, Form) over arbitrary usernames.
     Returns (owner_name_result, cross_doc_reconciliation_result).
     """
     norm_policy = normalize_name(policy_owner)
@@ -113,10 +114,46 @@ def verify_owner_name_and_cross_check(
     norm_dl = normalize_name(dl_holder)
     norm_claimant = normalize_name(claimant_name)
 
-    # 1. Primary Owner check (Policy vs RC)
-    rc_score = fuzz.token_sort_ratio(norm_policy, norm_rc) if norm_rc else 0.0
+    has_rc = bool(norm_rc and "unreadable" not in rc_owner.lower() and "not_extracted" not in rc_owner.lower())
+    has_dl = bool(norm_dl and "unreadable" not in dl_holder.lower() and "not_extracted" not in dl_holder.lower())
+    has_claimant = bool(norm_claimant and "unreadable" not in claimant_name.lower() and "not_extracted" not in claimant_name.lower())
+    has_policy = bool(norm_policy and "unreadable" not in policy_owner.lower())
 
-    if rc_score >= exact_thresh:
+    # Similarity scores across documents
+    rc_dl_score = fuzz.token_sort_ratio(norm_rc, norm_dl) if (has_rc and has_dl) else 0.0
+    rc_form_score = fuzz.token_sort_ratio(norm_rc, norm_claimant) if (has_rc and has_claimant) else 0.0
+    dl_form_score = fuzz.token_sort_ratio(norm_dl, norm_claimant) if (has_dl and has_claimant) else 0.0
+    rc_policy_score = fuzz.token_sort_ratio(norm_rc, norm_policy) if (has_rc and has_policy) else 0.0
+
+    # 1. Primary Owner Name Resolution
+    if not has_rc:
+        owner_res = FieldVerificationResult(
+            name="owner_name",
+            value="NOT_EXTRACTED",
+            confidence=0.0,
+            status="warning",
+            note="Owner name could not be extracted from RC document",
+            isResolved=False,
+        )
+    elif rc_dl_score >= exact_thresh and (rc_form_score >= exact_thresh or not has_claimant):
+        owner_res = FieldVerificationResult(
+            name="owner_name",
+            value=rc_owner,
+            confidence=1.0,
+            status="verified",
+            note=f"Exact name match across RC, DL, and Claim Form ('{rc_owner}')",
+            isResolved=False,
+        )
+    elif rc_dl_score >= exact_thresh:
+        owner_res = FieldVerificationResult(
+            name="owner_name",
+            value=rc_owner,
+            confidence=0.98,
+            status="verified",
+            note=f"Exact match between RC owner and Driving Licence holder ('{rc_owner}')",
+            isResolved=False,
+        )
+    elif rc_policy_score >= exact_thresh:
         owner_res = FieldVerificationResult(
             name="owner_name",
             value=rc_owner or policy_owner,
@@ -125,63 +162,109 @@ def verify_owner_name_and_cross_check(
             note="Exact match against policy record",
             isResolved=False,
         )
-    elif rc_score >= match_thresh:
+    elif rc_form_score >= exact_thresh and (rc_dl_score >= match_thresh or rc_policy_score >= match_thresh or not has_dl):
         owner_res = FieldVerificationResult(
             name="owner_name",
             value=rc_owner,
-            confidence=round(rc_score / 100.0, 2),
+            confidence=0.98,
+            status="verified",
+            note=f"Exact match between RC owner and Claim Form claimant ('{rc_owner}')",
+            isResolved=False,
+        )
+    elif rc_dl_score >= match_thresh:
+        owner_res = FieldVerificationResult(
+            name="owner_name",
+            value=rc_owner,
+            confidence=round(rc_dl_score / 100.0, 2),
             status="resolved",
-            note=f"Resolved via fuzzy match ({rc_score:.1f}% similarity vs policy record '{policy_owner}')",
+            note=f"Resolved via fuzzy match across documents ({rc_dl_score:.1f}% similarity with Driving Licence)",
             isResolved=True,
+        )
+    elif rc_policy_score >= match_thresh:
+        owner_res = FieldVerificationResult(
+            name="owner_name",
+            value=rc_owner,
+            confidence=round(rc_policy_score / 100.0, 2),
+            status="resolved",
+            note=f"Resolved via fuzzy match ({rc_policy_score:.1f}% similarity vs policy record '{policy_owner}')",
+            isResolved=True,
+        )
+    elif has_rc and (not has_dl and not has_claimant and rc_policy_score >= match_thresh):
+        owner_res = FieldVerificationResult(
+            name="owner_name",
+            value=rc_owner,
+            confidence=0.95,
+            status="verified",
+            note=f"RC owner '{rc_owner}' verified from official certificate",
+            isResolved=False,
+        )
+    elif rc_dl_score < match_thresh and rc_policy_score < match_thresh:
+        # Cross-document conflict / fraud mismatch
+        owner_res = FieldVerificationResult(
+            name="owner_name",
+            value=rc_owner or "NOT_EXTRACTED",
+            confidence=round(max(0.2, max(rc_dl_score, rc_form_score, rc_policy_score) / 100.0), 2),
+            status="warning",
+            note=f"Owner name mismatch: RC lists '{rc_owner}', DL lists '{dl_holder or 'N/A'}', Form lists '{claimant_name or 'N/A'}'",
+            isResolved=False,
         )
     else:
         owner_res = FieldVerificationResult(
             name="owner_name",
-            value=rc_owner or "NOT_EXTRACTED",
-            confidence=round(max(0.2, rc_score / 100.0), 2),
-            status="warning",
-            note=f"Owner name mismatch: RC name '{rc_owner}' differs from policy record '{policy_owner}' (similarity: {rc_score:.1f}%)",
-            isResolved=False,
-        )
-
-    # 2. Cross-document entity reconciliation (Policyholder vs DL Driver vs Claimant)
-    dl_vs_policy_score = fuzz.token_sort_ratio(norm_policy, norm_dl) if norm_dl else 100.0
-    claimant_vs_policy_score = fuzz.token_sort_ratio(norm_policy, norm_claimant) if norm_claimant else 100.0
-
-    if dl_vs_policy_score >= match_thresh and claimant_vs_policy_score >= match_thresh:
-        cross_res = FieldVerificationResult(
-            name="cross_doc_identity",
-            value=f"Insured: {policy_owner} | Driver: {dl_holder}",
-            confidence=0.98,
-            status="verified",
-            note="Complete identity alignment across Policy, RC, DL, and Claim Form",
-            isResolved=False,
-        )
-    elif dl_vs_policy_score < match_thresh and dl_vs_policy_score >= settings.FUZZY_CROSS_DOC_SUSPICIOUS_THRESHOLD:
-        cross_res = FieldVerificationResult(
-            name="cross_doc_identity",
-            value=f"Insured: {policy_owner} | Driver: {dl_holder}",
-            confidence=0.88,
+            value=rc_owner,
+            confidence=0.90,
             status="resolved",
-            note=f"Driver on DL ('{dl_holder}') differs slightly from policyholder ('{policy_owner}'), resolved as authorized driver/relative.",
+            note=f"Owner name '{rc_owner}' verified from credentials",
             isResolved=True,
         )
-    elif dl_vs_policy_score < settings.FUZZY_CROSS_DOC_SUSPICIOUS_THRESHOLD:
+
+    # 2. Cross-document entity reconciliation (RC Owner vs DL Driver vs Claimant)
+    primary_owner = rc_owner or policy_owner or "Unknown"
+    driver_name = dl_holder or rc_owner or policy_owner or "Unknown"
+
+    if (rc_dl_score >= match_thresh or not has_dl) and (rc_form_score >= match_thresh or not has_claimant):
         cross_res = FieldVerificationResult(
             name="cross_doc_identity",
-            value=f"Insured: {policy_owner} | Driver: {dl_holder}",
+            value=f"Owner: {primary_owner} | Driver: {driver_name}",
+            confidence=0.98,
+            status="verified",
+            note="Complete identity alignment across RC, DL, and Claim Form",
+            isResolved=False,
+        )
+    elif dl_form_score >= match_thresh and has_dl and has_claimant:
+        cross_res = FieldVerificationResult(
+            name="cross_doc_identity",
+            value=f"Owner: {primary_owner} | Driver/Claimant: {dl_holder}",
+            confidence=0.90,
+            status="resolved",
+            note=f"Driver on DL matches Claim Form claimant ('{dl_holder}'). Vehicle registered to '{primary_owner}'.",
+            isResolved=True,
+        )
+    elif rc_dl_score < match_thresh and rc_dl_score >= settings.FUZZY_CROSS_DOC_SUSPICIOUS_THRESHOLD and has_dl:
+        cross_res = FieldVerificationResult(
+            name="cross_doc_identity",
+            value=f"Owner: {primary_owner} | Driver: {dl_holder}",
+            confidence=0.88,
+            status="resolved",
+            note=f"Driver on DL ('{dl_holder}') differs slightly from vehicle owner ('{primary_owner}'), resolved as authorized driver/relative.",
+            isResolved=True,
+        )
+    elif has_rc and has_dl and rc_dl_score < settings.FUZZY_CROSS_DOC_SUSPICIOUS_THRESHOLD:
+        cross_res = FieldVerificationResult(
+            name="cross_doc_identity",
+            value=f"Owner: {primary_owner} | Driver: {dl_holder}",
             confidence=0.75,
             status="resolved",
-            note=f"Designated driver on DL ('{dl_holder}') is distinct from policyholder ('{policy_owner}'). Marked as third-party authorized driver.",
+            note=f"Designated driver on DL ('{dl_holder}') is distinct from vehicle owner ('{primary_owner}'). Marked as third-party authorized driver.",
             isResolved=True,
         )
     else:
         cross_res = FieldVerificationResult(
             name="cross_doc_identity",
-            value=f"Claimant: {claimant_name} | Insured: {policy_owner}",
+            value=f"Claimant: {claimant_name} | Owner: {primary_owner}",
             confidence=0.60,
             status="warning",
-            note=f"Suspicious discrepancy: Claim form signed by '{claimant_name}', but policy belongs to '{policy_owner}'.",
+            note=f"Suspicious discrepancy: Claim form signed by '{claimant_name}', but vehicle belongs to '{primary_owner}'.",
             isResolved=False,
         )
 
@@ -195,9 +278,13 @@ def verify_rc_and_plate(
     exact_thresh: float = 98.0,
     match_thresh: float = 85.0,
 ) -> FieldVerificationResult:
-    """Verifies vehicle registration number across Policy, RC, and Claim Form."""
+    """
+    Verifies vehicle registration number across RC book, Claim form, and policy record.
+    Prioritizes agreement between official documents (RC and Claim Form).
+    """
     norm_policy = normalize_alphanumeric(policy_rc)
     norm_extracted = normalize_alphanumeric(extracted_rc)
+    norm_form = normalize_alphanumeric(claim_form_vehicle) if claim_form_vehicle else ""
 
     if not norm_extracted:
         return FieldVerificationResult(
@@ -209,48 +296,64 @@ def verify_rc_and_plate(
             isResolved=False,
         )
 
-    score = fuzz.ratio(norm_policy, norm_extracted)
+    rc_policy_score = fuzz.ratio(norm_policy, norm_extracted) if norm_policy else 0.0
+    rc_form_score = fuzz.ratio(norm_extracted, norm_form) if norm_form else 0.0
 
-    # Check cross-match with form vehicle number if present
-    form_score = 100.0
-    if claim_form_vehicle and claim_form_vehicle.strip():
-        norm_form_veh = normalize_alphanumeric(claim_form_vehicle)
-        form_score = fuzz.ratio(norm_policy, norm_form_veh)
-
-    if norm_policy == norm_extracted or score >= exact_thresh:
-        if form_score < match_thresh:
-            return FieldVerificationResult(
-                name="rc_number",
-                value=extracted_rc.strip().upper(),
-                confidence=0.85,
-                status="resolved",
-                note=f"RC matches policy exactly, but Claim Form lists vehicle '{claim_form_vehicle}'. Resolved to official RC plate.",
-                isResolved=True,
-            )
+    # 1. Exact match between RC book and Claim form or Policy
+    if norm_extracted == norm_form or rc_form_score >= exact_thresh:
         return FieldVerificationResult(
             name="rc_number",
             value=extracted_rc.strip().upper(),
             confidence=1.0,
             status="verified",
-            note="Exact RC number match against policy record",
+            note=f"Number plate matches across RC book and Claim form ('{extracted_rc.strip().upper()}')",
             isResolved=False,
         )
-    elif score >= match_thresh:
+    elif norm_policy == norm_extracted or rc_policy_score >= exact_thresh:
         return FieldVerificationResult(
             name="rc_number",
             value=extracted_rc.strip().upper(),
-            confidence=round(score / 100.0, 2),
+            confidence=1.0,
+            status="verified",
+            note=f"Number plate matches policy record ('{extracted_rc.strip().upper()}')",
+            isResolved=False,
+        )
+    elif rc_form_score >= match_thresh:
+        return FieldVerificationResult(
+            name="rc_number",
+            value=extracted_rc.strip().upper(),
+            confidence=round(rc_form_score / 100.0, 2),
             status="resolved",
-            note=f"Resolved minor OCR character variance ({score:.1f}% match vs policy '{policy_rc}')",
+            note=f"Number plate resolved ({rc_form_score:.1f}% match with Claim form)",
             isResolved=True,
         )
-    else:
+    elif rc_policy_score >= match_thresh:
         return FieldVerificationResult(
             name="rc_number",
             value=extracted_rc.strip().upper(),
-            confidence=round(score / 100.0, 2),
+            confidence=round(rc_policy_score / 100.0, 2),
+            status="resolved",
+            note=f"Number plate resolved ({rc_policy_score:.1f}% match with policy record)",
+            isResolved=True,
+        )
+    elif norm_extracted and not norm_form:
+        # Only RC available, no contradiction on form
+        return FieldVerificationResult(
+            name="rc_number",
+            value=extracted_rc.strip().upper(),
+            confidence=0.95,
+            status="verified",
+            note=f"Number plate '{extracted_rc.strip().upper()}' verified from official RC book",
+            isResolved=False,
+        )
+    else:
+        # Genuine discrepancy between RC book and Claim form
+        return FieldVerificationResult(
+            name="rc_number",
+            value=extracted_rc.strip().upper(),
+            confidence=round(max(rc_form_score, rc_policy_score) / 100.0, 2),
             status="warning",
-            note=f"RC number mismatch: extracted '{extracted_rc}' differs from policy '{policy_rc}'",
+            note=f"Number plate mismatch: RC book lists '{extracted_rc.strip().upper()}', but Claim form lists '{claim_form_vehicle or 'N/A'}'",
             isResolved=False,
         )
 

@@ -50,13 +50,13 @@ def duplicate_check(
     claim_id: Optional[str] = None,
 ) -> FraudCheckResult:
     """
-    Perceptual hash check against previously processed claims to catch re-submitted crash photos.
+    Checks that the submitted vehicle damage photos have not been re-used from previous claims.
     """
     if not damage_photos_bytes:
         return FraudCheckResult(
-            name="Duplicate Claim Hash Check",
+            name="Photo Duplicate Check",
             status="passed",
-            detail="Zero photos to compare against historical repository",
+            detail="No photos to compare against past claims.",
         )
 
     current_hashes = [_compute_perceptual_hash(p) for p in damage_photos_bytes]
@@ -64,9 +64,9 @@ def duplicate_check(
     for h in current_hashes:
         if h in _PROCESSED_CLAIM_HASHES:
             return FraudCheckResult(
-                name="Duplicate Claim Hash Check",
+                name="Photo Duplicate Check",
                 status="failed",
-                detail=f"DUPLICATE PHOTO DETECTED: Image perceptual hash ({h}) matches an existing settled claim in the repository.",
+                detail="Duplicate photo detected: Image matches a previous claim in the system.",
             )
 
     # Register current hashes in local registry
@@ -74,56 +74,63 @@ def duplicate_check(
         _PROCESSED_CLAIM_HASHES.add(h)
 
     return FraudCheckResult(
-        name="Duplicate Claim Hash Check",
+        name="Photo Duplicate Check",
         status="passed",
-        detail=f"Perceptual hash verified unique ({len(current_hashes)} photo hashes registered).",
+        detail=f"Photo check passed: All {len(current_hashes)} vehicle damage photos are unique.",
     )
 
 
 def plate_vs_rc_check(
     extracted_plate: str,
     policy_rc: str,
+    form_plate: Optional[str] = None,
 ) -> FraudCheckResult:
     """
-    Cross-verifies the plate number extracted from vehicle photos/documents against policy RC.
-    Tolerates minor OCR character ambiguities (e.g. 0 vs O, 1 vs I).
+    Cross-verifies the number plate between vehicle photos, RC book, and Claim form.
+    Tolerates minor OCR character variations.
     """
     def clean(s: str) -> str:
-        # Standardize alphanumeric and replace common OCR confusions
-        cleaned = re.sub(r"[^A-Za-z0-9]", "", s).upper()
-        # Normalization for OCR confusion
-        cleaned = cleaned.replace("O", "0").replace("I", "1")
-        return cleaned
+        cleaned = re.sub(r"[^A-Za-z0-9]", "", s or "").upper()
+        return cleaned.replace("O", "0").replace("I", "1")
 
-    c_plate = clean(extracted_plate or "")
-    c_rc = clean(policy_rc or "")
+    c_plate = clean(extracted_plate)
+    c_rc = clean(policy_rc)
+    c_form = clean(form_plate) if form_plate else ""
 
-    if not c_plate or not c_rc or "UNREADABLE" in extracted_plate.upper() or "MISSING" in extracted_plate.upper():
+    if not c_plate and not c_form:
         return FraudCheckResult(
-            name="Number Plate AI Parity",
+            name="Vehicle Number Plate Match",
             status="warning",
-            detail="Number plate unreadable or not extracted from documents/photos.",
+            detail="Vehicle number plate could not be extracted from photos or documents.",
         )
 
-    score = fuzz.ratio(c_plate, c_rc)
+    # Score against form and policy
+    score_form = fuzz.ratio(c_plate, c_form) if (c_plate and c_form) else 0.0
+    score_policy = fuzz.ratio(c_plate, c_rc) if (c_plate and c_rc) else 0.0
 
-    if score >= 95.0:
+    if score_form >= 85.0 or (c_plate and c_form and c_plate == c_form):
         return FraudCheckResult(
-            name="Number Plate AI Parity",
+            name="Vehicle Number Plate Match",
             status="passed",
-            detail=f"{policy_rc} verified on live photos against RC (Parity: {score:.1f}%)",
+            detail=f"Number plate '{extracted_plate or form_plate}' matches across vehicle photos, RC book, and claim form.",
         )
-    elif score >= 80.0:
+    elif score_policy >= 85.0 or (c_plate and c_rc and c_plate == c_rc):
         return FraudCheckResult(
-            name="Number Plate AI Parity",
+            name="Vehicle Number Plate Match",
             status="passed",
-            detail=f"Resolved OCR character variance between plate ({extracted_plate}) and policy ({policy_rc})",
+            detail=f"Number plate '{extracted_plate}' matches policy registration.",
+        )
+    elif c_plate and not c_form and not c_rc:
+        return FraudCheckResult(
+            name="Vehicle Number Plate Match",
+            status="passed",
+            detail=f"Number plate '{extracted_plate}' verified on vehicle.",
         )
     else:
         return FraudCheckResult(
-            name="Number Plate AI Parity",
+            name="Vehicle Number Plate Match",
             status="failed",
-            detail=f"MISMATCH: Extracted plate '{extracted_plate}' does not match insured RC '{policy_rc}' (Similarity: {score:.1f}%)",
+            detail=f"Number plate discrepancy: Photo/RC shows '{extracted_plate}', but Record/Form shows '{form_plate or policy_rc}'.",
         )
 
 
@@ -132,12 +139,12 @@ def form_vs_image_check(
     detected_parts: List[Dict[str, Any]],
 ) -> FraudCheckResult:
     """
-    Compares the verbatim damage narrative written on the Claim Form against
-    the actual physically detected damaged parts from vehicle photos.
+    Compares the damage description written on the Claim Form against
+    the damaged parts detected from vehicle photos.
     """
     if not damage_description_from_form or not damage_description_from_form.strip():
         return FraudCheckResult(
-            name="Form vs. Image Metadata Consistency",
+            name="Damage Description Match",
             status="warning",
             detail="Claim form damage description is blank or unreadable",
         )
@@ -156,48 +163,44 @@ def form_vs_image_check(
         "light": ["headlight", "headlamp", "taillight", "lamp", "fog"],
     }
 
-    # Identify parts mentioned on form
     mentioned_categories = set()
     for cat, kws in part_keywords.items():
         if any(kw in form_text for kw in kws):
             mentioned_categories.add(cat)
 
-    # Identify parts detected by computer vision
     detected_categories = set()
     for p in detected_part_names:
         for cat, kws in part_keywords.items():
             if any(kw in p for kw in kws):
                 detected_categories.add(cat)
 
-    # Check for complete contradiction (e.g. form explicitly says "rear bumper", but photos only show front damage)
     if "rear" in form_text and "front" in " ".join(detected_part_names) and "rear" not in " ".join(detected_part_names):
         return FraudCheckResult(
-            name="Form vs. Image Metadata Consistency",
+            name="Damage Description Match",
             status="warning",
-            detail="Directional Discrepancy: Form describes rear impact, but image analysis isolated only front-end damage.",
+            detail="Impact Direction Discrepancy: Form describes rear impact, but photos show front damage.",
         )
 
-    # General overlap check
     if mentioned_categories and detected_categories:
         overlap = mentioned_categories.intersection(detected_categories)
         if overlap:
             return FraudCheckResult(
-                name="Form vs. Image Metadata Consistency",
+                name="Damage Description Match",
                 status="passed",
-                detail="Accident description matches visual damage isolated by vision pipeline",
+                detail="Accident description matches the damaged parts detected in photos.",
             )
 
     if not detected_parts:
         return FraudCheckResult(
-            name="Form vs. Image Metadata Consistency",
-            status="passed" if "No damage" in damage_description_from_form or not damage_description_from_form else "warning",
-            detail="Zero physical vehicle damage isolated on uploaded photos to correlate with narrative.",
+            name="Damage Description Match",
+            status="passed" if "no damage" in form_text or not damage_description_from_form else "warning",
+            detail="No physical vehicle damage detected on uploaded photos to compare with narrative.",
         )
 
     return FraudCheckResult(
-        name="Form vs. Image Metadata Consistency",
+        name="Damage Description Match",
         status="passed",
-        detail="Incident narrative aligns with physical damage pattern",
+        detail="Incident description aligns with damaged parts in photos.",
     )
 
 
@@ -205,29 +208,22 @@ def live_camera_anti_spoofing_check(
     damage_photos_bytes: List[bytes],
 ) -> FraudCheckResult:
     """
-    Inspects image EXIF metadata, dimensions, and compression artifacts to detect
-    screenshots, web-downloaded images, or digitally manipulated photos.
-    
-    Checks performed:
-    1. EXIF camera metadata presence (real photos have Make, Model, exposure data)
-    2. Suspicious screenshot dimensions (exact phone/tablet screen sizes)
-    3. Compression quality indicators
+    Inspects image metadata and dimensions to confirm photos are genuine vehicle captures.
     """
     if not damage_photos_bytes:
         return FraudCheckResult(
-            name="Live Camera Anti-Spoofing",
+            name="Photo Authenticity Check",
             status="warning",
-            detail="No photos provided for optical capture analysis.",
+            detail="No photos provided for authenticity check.",
         )
 
-    # Common screenshot dimensions (width x height) for phones/tablets
     SCREENSHOT_DIMENSIONS = {
-        (1080, 2400), (1080, 2340), (1080, 2280), (1080, 1920),  # Android FHD
-        (1440, 3200), (1440, 3120), (1440, 2560),  # Android QHD
-        (1170, 2532), (1125, 2436), (1242, 2688), (1284, 2778),  # iPhone
-        (1179, 2556), (1290, 2796),  # iPhone 14/15
-        (750, 1334), (828, 1792),  # iPhone SE/XR
-        (2048, 2732), (1620, 2160), (1668, 2388),  # iPad
+        (1080, 2400), (1080, 2340), (1080, 2280), (1080, 1920),
+        (1440, 3200), (1440, 3120), (1440, 2560),
+        (1170, 2532), (1125, 2436), (1242, 2688), (1284, 2778),
+        (1179, 2556), (1290, 2796),
+        (750, 1334), (828, 1792),
+        (2048, 2732), (1620, 2160), (1668, 2388),
     }
 
     warnings = []
@@ -240,7 +236,6 @@ def live_camera_anti_spoofing_check(
             img = Image.open(io.BytesIO(photo_bytes))
             width, height = img.size
 
-            # Check 1: EXIF metadata
             exif_data = {}
             try:
                 from PIL.ExifTags import TAGS
@@ -260,7 +255,6 @@ def live_camera_anti_spoofing_check(
             else:
                 photos_without_exif += 1
 
-            # Check 2: Screenshot dimensions
             dims = (width, height)
             dims_rotated = (height, width)
             if dims in SCREENSHOT_DIMENSIONS or dims_rotated in SCREENSHOT_DIMENSIONS:
@@ -268,63 +262,42 @@ def live_camera_anti_spoofing_check(
                 warnings.append(f"Photo #{idx+1} has exact screen resolution ({width}x{height})")
 
         except Exception:
-            # Can't analyze this photo — don't claim we verified it
-            warnings.append(f"Photo #{idx+1} could not be analyzed for authenticity")
+            warnings.append(f"Photo #{idx+1} could not be analyzed")
 
     total = len(damage_photos_bytes)
 
-    # Decision logic
     if photos_without_exif == total and suspicious_dimensions > 0:
         return FraudCheckResult(
-            name="Live Camera Anti-Spoofing",
+            name="Photo Authenticity Check",
             status="failed",
-            detail=f"All {total} photos lack camera EXIF metadata and {suspicious_dimensions} have screenshot-like dimensions. "
-                   f"Images appear to be screenshots or web downloads, not original camera captures.",
+            detail=f"Photos appear to be screenshots or web downloads ({suspicious_dimensions} screen-resolution photos).",
         )
 
     if photos_without_exif == total:
         return FraudCheckResult(
-            name="Live Camera Anti-Spoofing",
+            name="Photo Authenticity Check",
             status="warning",
-            detail=f"None of the {total} uploaded photos contain camera EXIF metadata (Make, Model, exposure). "
-                   f"This may indicate re-saved, compressed, or downloaded images rather than original camera captures.",
+            detail="Photos do not have embedded camera metadata, likely re-saved or compressed.",
         )
 
     if suspicious_dimensions > 0:
         return FraudCheckResult(
-            name="Live Camera Anti-Spoofing",
+            name="Photo Authenticity Check",
             status="warning",
-            detail=f"{suspicious_dimensions} of {total} photos have screenshot-like dimensions. "
-                   f"{photos_with_exif} photos have valid camera EXIF metadata.",
+            detail=f"{suspicious_dimensions} of {total} photos have screenshot-like dimensions.",
         )
 
     if photos_with_exif == total:
-        cameras = set()
-        for photo_bytes in damage_photos_bytes:
-            try:
-                img = Image.open(io.BytesIO(photo_bytes))
-                raw_exif = img._getexif()
-                if raw_exif:
-                    from PIL.ExifTags import TAGS
-                    exif = {TAGS.get(k, k): v for k, v in raw_exif.items()}
-                    cam = f"{exif.get('Make', '')} {exif.get('Model', '')}".strip()
-                    if cam:
-                        cameras.add(cam)
-            except Exception:
-                pass
-        
-        camera_info = f" Camera(s): {', '.join(cameras)}." if cameras else ""
         return FraudCheckResult(
-            name="Live Camera Anti-Spoofing",
+            name="Photo Authenticity Check",
             status="passed",
-            detail=f"All {total} photos contain valid camera EXIF metadata confirming authentic capture.{camera_info}",
+            detail=f"All {total} photos verified as genuine camera captures with camera metadata.",
         )
 
     return FraudCheckResult(
-        name="Live Camera Anti-Spoofing",
+        name="Photo Authenticity Check",
         status="warning",
-        detail=f"{photos_with_exif} of {total} photos have camera EXIF metadata. "
-               f"{photos_without_exif} photos lack camera information.",
+        detail=f"{photos_with_exif} of {total} photos contain camera metadata.",
     )
 
 
@@ -335,10 +308,11 @@ def run_all_fraud_checks(
     damage_description_from_form: str,
     detected_parts: List[Dict[str, Any]],
     claim_id: Optional[str] = None,
+    form_plate: Optional[str] = None,
 ) -> List[FraudCheckResult]:
-    """Runs the complete suite of fraud verification checks."""
+    """Runs the complete suite of verification and accuracy checks."""
     c1 = duplicate_check(damage_photos_bytes, claim_id=claim_id)
-    c2 = plate_vs_rc_check(extracted_plate, policy_rc)
+    c2 = plate_vs_rc_check(extracted_plate, policy_rc, form_plate=form_plate)
     c3 = form_vs_image_check(damage_description_from_form, detected_parts)
     c4 = live_camera_anti_spoofing_check(damage_photos_bytes)
     return [c1, c2, c3, c4]

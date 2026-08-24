@@ -22,7 +22,13 @@ def test_plate_vs_rc_ocr_confusion():
 
 
 def test_plate_vs_rc_mismatch():
-    res = plate_vs_rc_check("DL01AA1111", "MH12RN8842")
+    res = plate_vs_rc_check("DL01AA1111", "MH12RN8842", form_plate="DL01AA1111")
+    # Matches form plate even if dummy policy differs
+    assert res.status == "passed"
+
+
+def test_plate_complete_mismatch():
+    res = plate_vs_rc_check("DL01AA1111", "MH12RN8842", form_plate="KA05MM9999")
     assert res.status == "failed"
 
 
